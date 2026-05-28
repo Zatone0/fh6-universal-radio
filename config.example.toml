@@ -8,7 +8,7 @@
 [general]
 port              = 8420
 ring_buffer_mb    = 4
-default_source    = "local_files"     # local_files | youtube_music
+default_source    = "local_files"     # local_files | youtube_music | jellyfin
 fallback_source   = "local_files"
 ffmpeg_path       = ''                # blank = `ffmpeg` on PATH; shared by all sources
 
