@@ -119,7 +119,9 @@ private:
 
     void* fmod_system_       = nullptr;
     void* current_dsp_       = nullptr;
-    uint32_t current_handle_ = 0;
+    // Read from the config-change thread via set_force_stereo_audio;
+    // mutated from the control-loop thread via install/release/retarget.
+    std::atomic<uint32_t> current_handle_{0};
     mutable uint32_t last_bad_handle_ = 0;  // suppress repeated rc=3 / SEH warnings for the same handle
     std::byte* radio_stream_ = nullptr;
 

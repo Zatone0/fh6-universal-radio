@@ -5,6 +5,7 @@
 #include "fh6/safe_mem.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace fh6::fmod_bridge {
@@ -175,11 +176,12 @@ bool DSPBridge::validate_handle(uint32_t handle) const noexcept {
 
 void DSPBridge::release_current_dsp_locked() noexcept {
     if (!current_dsp_) return;
-    if (current_handle_)
-        seh_call([&] { fns_.channel_control_rem_dsp(current_handle_, current_dsp_); });
+    const uint32_t handle = current_handle_.load(std::memory_order_relaxed);
+    if (handle)
+        seh_call([&] { fns_.channel_control_rem_dsp(handle, current_dsp_); });
     seh_call([&] { fns_.dsp_release(current_dsp_); });
-    current_dsp_    = nullptr;
-    current_handle_ = 0;
+    current_dsp_ = nullptr;
+    current_handle_.store(0, std::memory_order_release);
 }
 
 void DSPBridge::install_dsp_locked(uint32_t handle) noexcept {
@@ -236,8 +238,8 @@ void DSPBridge::install_dsp_locked(uint32_t handle) noexcept {
         return;
     }
 
-    current_dsp_    = dsp;
-    current_handle_ = handle;
+    current_dsp_ = dsp;
+    current_handle_.store(handle, std::memory_order_release);
     log::info("[dsp] installed dsp={} on handle=0x{:X}", dsp, handle);
 
     // Pin the channel in loop mode so FMOD doesn't tear it down when the
@@ -256,10 +258,11 @@ void DSPBridge::install_dsp_locked(uint32_t handle) noexcept {
 
 void DSPBridge::set_force_stereo_audio(bool v) noexcept {
     bool old = force_stereo_audio_.exchange(v, std::memory_order_release);
-    if (old != v && current_handle_ && fns_.channel_control_set_mode) {
-        uint32_t mode = v ? 0x2 : (0x2 | 0x8);
-        seh_call([&] { fns_.channel_control_set_mode(current_handle_, mode); });
-    }
+    if (old == v || !fns_.channel_control_set_mode) return;
+    const uint32_t handle = current_handle_.load(std::memory_order_acquire);
+    if (!handle) return;
+    const uint32_t mode = v ? kFmodLoopNormal : (kFmodLoopNormal | 0x8);
+    seh_call([&] { fns_.channel_control_set_mode(handle, mode); });
 }
 
 void DSPBridge::set_target(const RadioInstance& inst, void* fmod_system) noexcept {
@@ -276,7 +279,8 @@ uint32_t DSPBridge::read_live_handle(std::byte* radio_stream) const noexcept {
 }
 
 bool DSPBridge::current_handle_alive() const noexcept {
-    return current_handle_ != 0 && fns_.ready() && validate_handle(current_handle_);
+    const uint32_t handle = current_handle_.load(std::memory_order_acquire);
+    return handle != 0 && fns_.ready() && validate_handle(handle);
 }
 
 bool DSPBridge::channel_handle_alive(std::byte* radio_stream) const noexcept {
@@ -286,11 +290,12 @@ bool DSPBridge::channel_handle_alive(std::byte* radio_stream) const noexcept {
 void DSPBridge::retarget_if_needed() noexcept {
     if (mode() != DSPMode::pcm || !fmod_system_) return;
     const uint32_t handle = read_live_handle(radio_stream_);
-    if (handle == current_handle_) return;
+    if (handle == current_handle_.load(std::memory_order_relaxed)) return;
     // No live handle on the RadioStreamFmod. If we still think we're installed
     // on a dead one, release it so we stop querying the stale handle.
     if (!handle) {
-        if (current_handle_) release_current_dsp_locked();
+        if (current_handle_.load(std::memory_order_relaxed))
+            release_current_dsp_locked();
         return;
     }
 
