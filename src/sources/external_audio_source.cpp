@@ -1,4 +1,5 @@
 #include "fh6/sources/external_audio_source.hpp"
+#include "fh6/sources/external_media_session.hpp"
 
 #include "fh6/log.hpp"
 #include "fh6/ring_buffer.hpp"
@@ -180,6 +181,48 @@ std::optional<std::string> parse_endpoint_id_from_config() {
   auto key = line.substr(0, eq);
   key.erase(std::remove_if(key.begin(), key.end(), [](unsigned char c) { return std::isspace(c); }), key.end());
   if (key != "endpoint_id") continue;
+
+  auto value = line.substr(eq + 1);
+  auto a = value.find_first_not_of(" \t\r\n");
+  auto b = value.find_last_not_of(" \t\r\n");
+  if (a == std::string::npos) return std::string{};
+  value = value.substr(a, b - a + 1);
+  if (value.size() >= 2 && ((value.front() == '\'' && value.back() == '\'') ||
+   (value.front() == '"' && value.back() == '"'))) {
+   value = value.substr(1, value.size() - 2);
+  }
+  return value;
+ }
+
+ return std::nullopt;
+}
+
+std::optional<std::string> parse_media_session_id_from_config() {
+ std::ifstream in{config_path(), std::ios::binary};
+ if (!in) return std::nullopt;
+
+ bool in_external = false;
+ std::string line;
+ while (std::getline(in, line)) {
+  auto comment = line.find('#');
+  if (comment != std::string::npos) line.resize(comment);
+
+  auto first = line.find_first_not_of(" \t\r\n");
+  if (first == std::string::npos) continue;
+  auto last = line.find_last_not_of(" \t\r\n");
+  line = line.substr(first, last - first + 1);
+
+  if (line.size() >= 3 && line.front() == '[' && line.back() == ']') {
+   in_external = (line == "[external_audio]");
+   continue;
+  }
+
+  if (!in_external) continue;
+  auto eq = line.find('=');
+  if (eq == std::string::npos) continue;
+  auto key = line.substr(0, eq);
+  key.erase(std::remove_if(key.begin(), key.end(), [](unsigned char c) { return std::isspace(c); }), key.end());
+  if (key != "media_session_id") continue;
 
   auto value = line.substr(eq + 1);
   auto a = value.find_first_not_of(" \t\r\n");
@@ -602,11 +645,17 @@ void ExternalAudioSource::shutdown() noexcept {
 }
 
 void ExternalAudioSource::play() {
+ // Source lifecycle only: selecting or resuming External Audio must not
+ // send Play to the user's external media application. Metadata and explicit
+ // next/previous actions are handled through the selected media session, but
+ // play/pause here only control whether this source feeds captured PCM to FH6.
  state_.store(PlaybackState::playing, std::memory_order_release);
  start_worker();
 }
 
 void ExternalAudioSource::pause() {
+ // Source lifecycle only: do not pause the selected Windows media session when
+ // the user switches away from External Audio or the source manager pauses us.
  state_.store(PlaybackState::paused, std::memory_order_release);
  stop_worker();
  clear_queue();
@@ -617,6 +666,18 @@ void ExternalAudioSource::stop() {
  stop_worker();
  clear_queue();
  position_ms_.store(0, std::memory_order_release);
+}
+
+void ExternalAudioSource::next() {
+ (void)skip_next();
+}
+
+void ExternalAudioSource::previous() {
+ (void)external_audio_media_session_previous(parse_media_session_id_from_config().value_or(std::string{}));
+}
+
+bool ExternalAudioSource::skip_next() {
+ return external_audio_media_session_next(parse_media_session_id_from_config().value_or(std::string{}));
 }
 
 void ExternalAudioSource::pump(RingBuffer& ring) {
@@ -655,12 +716,19 @@ void ExternalAudioSource::pump(RingBuffer& ring) {
 }
 
 TrackInfo ExternalAudioSource::current_track() const {
+ const auto fallback_position = position_ms_.load(std::memory_order_acquire);
+ const auto selected_session = parse_media_session_id_from_config().value_or(std::string{});
+ if (auto t = external_audio_media_session_track(selected_session, fallback_position)) {
+  if (t->album.empty()) t->album = "External Audio";
+  return *t;
+ }
+
  std::scoped_lock lk{meta_mu_};
  TrackInfo t;
- t.title = "System Audio";
- t.artist = device_name_.empty() ? "Default playback device" : device_name_;
+ t.title = "External Audio";
+ t.artist = device_name_.empty() ? "No media session metadata" : device_name_;
  t.album = "External Audio";
- t.position_ms = position_ms_.load(std::memory_order_acquire);
+ t.position_ms = fallback_position;
  return t;
 }
 

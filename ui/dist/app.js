@@ -114,6 +114,9 @@ function renderSources() {
 
 let extDevices = [];
 let extEndpoint = "";
+let extMediaSessions = [];
+let extMediaSessionId = "";
+let extMediaSessionsAvailable = false;
 let extLoaded = false;
 let extLoading = false;
 
@@ -126,11 +129,16 @@ function ensureExternalAudioCard() {
   card.className = "card";
   card.hidden = true;
   card.innerHTML = `
-    <h2>External Audio Device</h2>
-    <p class="muted">Select the Windows playback device captured by External Audio. Leave Default selected to follow the current Windows default playback device.</p>
+    <h2>External Audio</h2>
+    <p class="muted">Select the Windows playback device used for audio capture and the media session used for metadata and next/previous commands.</p>
+    <label class="external-audio-label" for="external-audio-device">Capture device</label>
     <div class="row external-audio-row">
       <select id="external-audio-device" aria-label="External Audio capture device"></select>
       <button id="external-audio-refresh" class="ghost" type="button">Refresh</button>
+    </div>
+    <label class="external-audio-label" for="external-audio-session">Media session</label>
+    <div class="row external-audio-row">
+      <select id="external-audio-session" aria-label="External Audio media session"></select>
       <button id="external-audio-save" class="primary" type="button">Save</button>
     </div>
     <p id="external-audio-hint" class="muted"></p>
@@ -146,17 +154,28 @@ function ensureExternalAudioCard() {
   });
 
   $("#external-audio-save", card).addEventListener("click", async () => {
-    const select = $("#external-audio-device", card);
+    const deviceSelect = $("#external-audio-device", card);
+    const sessionSelect = $("#external-audio-session", card);
     try {
       const enabled = !!cfg?.external_audio?.enabled;
-      const r = await api.send("/api/external_audio/config", { enabled, endpoint_id: select.value }, "PUT");
-      cfg = { ...(cfg || {}), external_audio: { ...(cfg?.external_audio || {}), enabled: !!r.enabled, endpoint_id: r.endpoint_id ?? select.value } };
-      extEndpoint = r.endpoint_id ?? select.value;
+      const r = await api.send("/api/external_audio/config", {
+        enabled,
+        endpoint_id: deviceSelect.value,
+        media_session_id: sessionSelect.value,
+      }, "PUT");
+      cfg = { ...(cfg || {}), external_audio: {
+        ...(cfg?.external_audio || {}),
+        enabled: !!r.enabled,
+        endpoint_id: r.endpoint_id ?? deviceSelect.value,
+        media_session_id: r.media_session_id ?? sessionSelect.value,
+      } };
+      extEndpoint = r.endpoint_id ?? deviceSelect.value;
+      extMediaSessionId = r.media_session_id ?? sessionSelect.value;
       extLoaded = false;
       state = await api.get("/api/state");
       await loadExternalAudioDevices(true);
       render();
-      toast("External Audio device saved");
+      toast("External Audio settings saved");
     } catch (e) {
       toast(e.message, true);
     }
@@ -172,9 +191,14 @@ async function loadExternalAudioDevices(force = false) {
     const r = await api.get("/api/external_audio/devices");
     extDevices = Array.isArray(r.devices) ? r.devices : [];
     extEndpoint = r.endpoint_id || "";
+    extMediaSessions = Array.isArray(r.media_sessions) ? r.media_sessions : [];
+    extMediaSessionId = r.media_session_id || "";
+    extMediaSessionsAvailable = !!r.media_sessions_available;
     extLoaded = true;
   } catch {
     extDevices = [];
+    extMediaSessions = [];
+    extMediaSessionsAvailable = false;
     extLoaded = false;
   } finally {
     extLoading = false;
@@ -191,15 +215,34 @@ function renderExternalAudioCard() {
 
   loadExternalAudioDevices();
 
-  const select = $("#external-audio-device", card);
-  const sig = `${extEndpoint}|${extDevices.map(d => `${d.id}:${d.name}:${d.is_default}`).join("|")}`;
-  if (select.dataset.sig !== sig) {
-    select.dataset.sig = sig;
-    select.innerHTML = "";
-    select.add(new Option("Default Windows playback device", "", false, extEndpoint === ""));
+  const deviceSelect = $("#external-audio-device", card);
+  const deviceSig = `${extEndpoint}|${extDevices.map(d => `${d.id}:${d.name}:${d.is_default}`).join("|")}`;
+  if (deviceSelect.dataset.sig !== deviceSig) {
+    deviceSelect.dataset.sig = deviceSig;
+    deviceSelect.innerHTML = "";
+    deviceSelect.add(new Option("Default Windows playback device", "", false, extEndpoint === ""));
     for (const d of extDevices) {
       const label = `${d.name || d.id}${d.is_default ? " (current default)" : ""}`;
-      select.add(new Option(label, d.id, false, extEndpoint === d.id));
+      deviceSelect.add(new Option(label, d.id, false, extEndpoint === d.id));
+    }
+  }
+
+  const sessionSelect = $("#external-audio-session", card);
+  const sessionSig = `${extMediaSessionId}|${extMediaSessionsAvailable}|${extMediaSessions.map(s => `${s.id}:${s.name}:${s.title}:${s.artist}:${s.is_current}`).join("|")}`;
+  if (sessionSelect.dataset.sig !== sessionSig) {
+    sessionSelect.dataset.sig = sessionSig;
+    sessionSelect.innerHTML = "";
+    sessionSelect.add(new Option("Current Windows media session", "", false, extMediaSessionId === ""));
+    for (const s of extMediaSessions) {
+      const now = s.title ? ` — ${s.title}${s.artist ? " / " + s.artist : ""}` : "";
+      const label = `${s.name || s.id}${s.is_current ? " (current)" : ""}${now}`;
+      sessionSelect.add(new Option(label, s.id, false, extMediaSessionId === s.id));
+    }
+    if (!extMediaSessionsAvailable) {
+      sessionSelect.add(new Option("Media session API is not available in this build", "", false, true));
+      sessionSelect.disabled = true;
+    } else {
+      sessionSelect.disabled = false;
     }
   }
 
@@ -207,11 +250,14 @@ function renderExternalAudioCard() {
   const selected = extEndpoint
     ? extDevices.find(d => d.id === extEndpoint)?.name || "saved endpoint"
     : "current Windows default playback device";
+  const session = extMediaSessionId
+    ? extMediaSessions.find(s => s.id === extMediaSessionId)?.name || "saved media session"
+    : "current Windows media session";
   $("#external-audio-hint", card).textContent = !available
-    ? `External Audio is enabled in settings, but the source is not registered yet. Saved capture device: ${selected}.`
+    ? `External Audio is enabled in settings, but the source is not registered yet. Capture: ${selected}. Media session: ${session}.`
     : active
-      ? `External Audio is active. Capturing: ${selected}.`
-      : `External Audio is available. Saved capture device: ${selected}.`;
+      ? `External Audio is active. Capturing: ${selected}. Metadata/control: ${session}.`
+      : `External Audio is available. Capture: ${selected}. Metadata/control: ${session}.`;
 }
 
 let volDirty = false;

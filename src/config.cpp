@@ -91,6 +91,8 @@ Config load_config(const std::filesystem::path& path) {
     cfg.external_audio.enabled = pick<bool>(ea, "enabled", cfg.external_audio.enabled);
     cfg.external_audio.endpoint_id =
         pick<std::string>(ea, "endpoint_id", cfg.external_audio.endpoint_id);
+    cfg.external_audio.media_session_id =
+        pick<std::string>(ea, "media_session_id", cfg.external_audio.media_session_id);
 
     const auto& au = section(root, "audio");
     cfg.audio.output_gain =
@@ -249,6 +251,7 @@ void save_config(const std::filesystem::path& path, const Config& cfg) {
     e.header("external_audio");
     e.kv("enabled", cfg.external_audio.enabled);
     e.kv("endpoint_id", cfg.external_audio.endpoint_id);
+    e.kv("media_session_id", cfg.external_audio.media_session_id);
 
     e.header("audio");
     e.kv("output_gain", (double)cfg.audio.output_gain);

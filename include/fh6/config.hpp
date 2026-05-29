@@ -64,6 +64,11 @@ struct ExternalAudioConfig {
     // Empty = current Windows default playback device. Otherwise a full WASAPI
     // endpoint id, or a stable user-entered substring used by ExternalAudioSource.
     std::string endpoint_id;
+
+    // Empty = current Windows media session. Otherwise a SourceAppUserModelId
+    // returned by GlobalSystemMediaTransportControls. Used for metadata and
+    // transport commands; audio capture still comes from endpoint_id.
+    std::string media_session_id;
 };
 
 struct Config {

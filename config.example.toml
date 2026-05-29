@@ -43,6 +43,8 @@ enabled = false
 # Empty = default Windows playback device. Otherwise use full endpoint id or part of device name, e.g. 'CABLE Input'.
 # This section is read directly by ExternalAudioSource.
 endpoint_id = ''
+# Empty = current Windows media session. Select a specific session from the dashboard when needed.
+media_session_id = ''
 
 [audio]
 output_gain = 1.0

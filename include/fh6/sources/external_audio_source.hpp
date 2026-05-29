@@ -36,6 +36,9 @@ public:
  void play() override;
  void pause() override;
  void stop() override;
+ void next() override;
+ void previous() override;
+ bool skip_next() override;
  void pump(RingBuffer& ring) override;
  void reload_from_config();
 
@@ -45,7 +48,7 @@ public:
  }
  AuthState auth_state() const noexcept override;
  std::string auth_instructions() const override;
- SourceCapabilities capabilities() const noexcept override { return {}; }
+ SourceCapabilities capabilities() const noexcept override { return SourceCapabilities{false, true, false}; }
 
 private:
  void start_worker();
