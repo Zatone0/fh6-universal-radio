@@ -129,10 +129,8 @@ std::optional<std::string> http_get(const JellyfinConfig& cfg, const std::string
 std::optional<std::vector<JellyfinTrack>> fetch_tracks(const JellyfinConfig& cfg) {
     std::string path;
     if (cfg.use_favorites) {
-        // query user's favorite audio items recursively
         path = std::format("/Users/{}/Items?Filters=IsFavorite&IncludeItemTypes=Audio&Recursive=true", cfg.user_id);
     } else {
-        // standard playlist query
         path = std::format("/Users/{}/Items?ParentId={}&Filters=IsNotFolder", cfg.user_id, cfg.default_playlist);
     }
     auto body = http_get(cfg, path);
