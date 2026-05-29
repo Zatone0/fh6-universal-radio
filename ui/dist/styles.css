@@ -201,6 +201,7 @@ main {
 }
 
 .external-audio-row select { flex: 1; min-width: 0; }
+
 .external-audio-label { display: block; margin: 12px 0 6px; color: var(--muted); font-size: 0.9rem; }
 
 input[type="text"], input[type="number"], select {
