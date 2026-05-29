@@ -14,6 +14,9 @@ struct PlaybackConfig {
     bool equalizer_enabled          = false;
     std::array<float, 5> equalizer_bands{}; // 60 / 250 / 1000 / 4000 / 12000 Hz, [-6, +6] dB
     bool force_stereo_audio         = true;
+    // Pre-spawn the next track's pipeline so transitions (skip / end-of-track)
+    // are instant.
+    bool prebuffer_next_track       = true;
 };
 
 struct GeneralConfig {
@@ -47,6 +50,7 @@ struct JellyfinConfig {
     std::string api_key;
     std::string user_id;
     std::string default_playlist;
+    bool use_favorites = false;
     bool shuffle = true;
 };
 

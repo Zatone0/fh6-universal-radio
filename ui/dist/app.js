@@ -253,6 +253,7 @@ const SCHEMA = [
     ["user_id",          "User ID",          "text"],
     ["api_key",          "API Key",          "text"],
     ["default_playlist", "Default Playlist", "text"],
+    ["use_favorites",    "Use Favorites",    "checkbox"],
     ["shuffle",          "Shuffle",          "checkbox"],
   ]],
   ["external_audio", "External Audio", [
@@ -268,6 +269,7 @@ const SCHEMA = [
     ["equalizer_enabled",    "Equalizer",                 "checkbox"],
     ["equalizer_bands",      "Equalizer bands",           "bands"],
     ["force_stereo_audio",   "Force stereo audio",        "checkbox"],
+    ["prebuffer_next_track", "Pre-buffer next track",     "checkbox"],
   ]],
 ];
 

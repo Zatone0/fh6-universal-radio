@@ -33,6 +33,7 @@ server_url         = ''                # e.g. 'http://127.0.0.1:8096'
 api_key            = ''                # generate this in the Jellyfin dashboard
 user_id            = ''                # the ID of the user to track playback against
 default_playlist   = ''                # jellyfin playlist ID goes here
+use_favorites      = false             # set to true to play your favorites instead of a playlist
 shuffle            = true              # true or false
 
 
@@ -53,3 +54,4 @@ volume_normalization = false       # apply ReplayGain (local files) / EBU R128 l
 equalizer_enabled    = false
 equalizer_bands      = [0.0, 0.0, 0.0, 0.0, 0.0]   # 60/250/1000/4000/12000 Hz, [-6, +6] dB
 force_stereo_audio   = true        # off => mono (avoids metallic phase-cancellation on the 3D radio channel)
+prebuffer_next_track = true        # pre-spawn the next track's pipeline so transitions skip the "(loading)" gap

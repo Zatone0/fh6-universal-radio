@@ -68,8 +68,13 @@ private:
 
     // mu_ held.
     bool refresh_queue_locked();   // releases mu_ across the HTTP fetch, re-acquires to swap
+    std::unique_ptr<Pipe> spawn_pipe_locked(std::size_t for_idx);
     void start_pipe_locked();
     void stop_pipe_locked();
+    void discard_prefetch_locked() noexcept;
+    bool promote_prefetch_locked(std::size_t expected_idx);
+    void maybe_spawn_prefetch_locked();
+    std::size_t next_queue_idx_locked() const noexcept;
     void advance_locked(std::ptrdiff_t step);
 
     JellyfinConfig cfg_;
@@ -79,10 +84,12 @@ private:
     std::vector<JellyfinTrack> queue_;
     std::size_t current_idx_ = 0;
     std::unique_ptr<Pipe> pipe_;
+    std::unique_ptr<Pipe> prefetch_;
     std::atomic<PlaybackState> state_{PlaybackState::stopped};
 
     EqualizerStage eq_;
     std::atomic<bool> volume_norm_{false};
+    std::atomic<bool> prebuffer_next_{true};
 };
 
 } // namespace fh6::sources

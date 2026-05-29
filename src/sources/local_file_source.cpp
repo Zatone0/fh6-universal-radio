@@ -146,31 +146,25 @@ struct LocalFileSource::Decoder {
     bool ff_eof                = false;
 
     TrackInfo info{};
+    // Per-decoder so a prefetched track promotes with its own ReplayGain
+    // multiplier instead of inheriting the current track's.
+    float loudness_coef     = 1.0f;
+    std::size_t for_cursor  = 0;
 
     bool any_open() const noexcept { return ma_open || ff_pipe != nullptr; }
 
-    void close_ff() {
-        if (ff_pipe) { CloseHandle(ff_pipe); ff_pipe = nullptr; }
-        if (ff_proc) { CloseHandle(ff_proc); ff_proc = nullptr; }
-        if (ff_job)  { CloseHandle(ff_job);  ff_job  = nullptr; }
-        ff_bytes_out = 0;
-        ff_eof       = false;
-    }
-
-    void close_all() {
-        if (ma_open) {
-            ma_decoder_uninit(&ma);
-            ma_open = false;
-        }
-        close_ff();
-        info = {};
+    ~Decoder() {
+        if (ma_open)  ma_decoder_uninit(&ma);
+        if (ff_pipe)  CloseHandle(ff_pipe);
+        if (ff_proc)  CloseHandle(ff_proc);
+        // KILL_ON_JOB_CLOSE on the job reaps ffmpeg if it's still resident.
+        if (ff_job)   CloseHandle(ff_job);
     }
 };
 
 LocalFileSource::LocalFileSource(LocalFilesConfig cfg, std::filesystem::path ffmpeg_path)
     : cfg_{std::move(cfg)},
-      ffmpeg_path_{std::move(ffmpeg_path)},
-      dec_{std::make_unique<Decoder>()} {}
+      ffmpeg_path_{std::move(ffmpeg_path)} {}
 
 LocalFileSource::~LocalFileSource() { close_current(); }
 
@@ -191,6 +185,7 @@ bool LocalFileSource::initialize() {
 
 void LocalFileSource::rebuild_playlist() {
     std::scoped_lock lk{mu_};
+    discard_prefetch_locked();   // playlist contents/order are about to change
     playlist_.clear();
     std::error_code ec;
     auto add = [&](const std::filesystem::path& p) {
@@ -215,65 +210,73 @@ void LocalFileSource::rebuild_playlist() {
 
 void LocalFileSource::close_current() {
     std::scoped_lock lk{mu_};
-    dec_->close_all();
+    discard_prefetch_locked();
+    dec_.reset();
 }
 
-bool LocalFileSource::open_track(std::size_t index) {
-    if (playlist_.empty()) return false;
-    cursor_          = index % playlist_.size();
-    const auto& path = playlist_[cursor_];
+std::unique_ptr<LocalFileSource::Decoder>
+LocalFileSource::open_decoder_locked(std::size_t index) {
+    if (playlist_.empty()) return nullptr;
+    const std::size_t resolved = index % playlist_.size();
+    const auto& path           = playlist_[resolved];
 
-    dec_->close_all();
+    auto d         = std::make_unique<Decoder>();
+    d->for_cursor  = resolved;
 
-    auto meta = probe_metadata(ffmpeg_path_.empty() ? L"ffmpeg" : ffmpeg_path_.wstring(), path);
-    dec_->info.duration_ms = meta.duration_ms;
-    dec_->info.title       = std::move(meta.title);
-    dec_->info.artist      = std::move(meta.artist);
-    dec_->info.album       = std::move(meta.album);
+    auto meta      = probe_metadata(ffmpeg_path_.empty() ? L"ffmpeg" : ffmpeg_path_.wstring(),
+                                     path);
+    d->info.duration_ms = meta.duration_ms;
+    d->info.title       = std::move(meta.title);
+    d->info.artist      = std::move(meta.artist);
+    d->info.album       = std::move(meta.album);
 
     ma_decoder_config mc = ma_decoder_config_init(ma_format_s16, 2, kSampleRate);
-    if (ma_decoder_init_file(path.string().c_str(), &mc, &dec_->ma) == MA_SUCCESS) {
-        dec_->ma_open = true;
+    if (ma_decoder_init_file(path.string().c_str(), &mc, &d->ma) == MA_SUCCESS) {
+        d->ma_open = true;
         // Decoded frame count beats ffmpeg's header duration on VBR MP3s.
         ma_uint64 frames = 0;
-        if (ma_decoder_get_length_in_pcm_frames(&dec_->ma, &frames) == MA_SUCCESS)
-            dec_->info.duration_ms = (frames * 1000ull) / kSampleRate;
-    } else if (!open_track_ffmpeg(path)) {
+        if (ma_decoder_get_length_in_pcm_frames(&d->ma, &frames) == MA_SUCCESS)
+            d->info.duration_ms = (frames * 1000ull) / kSampleRate;
+    } else if (!open_track_ffmpeg(*d, path)) {
         log::warn("[local] failed to open {} (miniaudio rejected the format and the ffmpeg "
                   "fallback also failed; install ffmpeg or convert the file)",
                   path.string());
-        return false;
+        return nullptr;
     }
 
-    if (dec_->info.title.empty()) dec_->info.title = path.stem().string();
-    if (dec_->info.album.empty()) dec_->info.album = path.parent_path().filename().string();
-    position_ms_.store(0, std::memory_order_release);
+    if (d->info.title.empty()) d->info.title = path.stem().string();
+    if (d->info.album.empty()) d->info.album = path.parent_path().filename().string();
 
     float gain_db = std::numeric_limits<float>::quiet_NaN();
     float peak    = std::numeric_limits<float>::quiet_NaN();
     parse_replaygain_file(path, gain_db, peak);
-    loudness_coef_.store(compute_loudness_correction(gain_db, peak), std::memory_order_release);
+    d->loudness_coef = compute_loudness_correction(gain_db, peak);
 
-    log::info("[local] now playing: {}", path.string());
+    return d;
+}
+
+bool LocalFileSource::open_track(std::size_t index) {
+    auto d = open_decoder_locked(index);
+    if (!d) return false;
+    cursor_ = d->for_cursor;
+    dec_    = std::move(d);
+    position_ms_.store(0, std::memory_order_release);
+    log::info("[local] now playing: {}", playlist_[cursor_].string());
     return true;
 }
 
-bool LocalFileSource::open_track_ffmpeg(const std::filesystem::path& path) {
+bool LocalFileSource::open_track_ffmpeg(Decoder& d, const std::filesystem::path& path) {
     const std::wstring ff = ffmpeg_path_.empty() ? L"ffmpeg" : ffmpeg_path_.wstring();
 
-    auto* d = dec_.get();
-    d->ff_job = create_kill_on_close_job();
-    if (!d->ff_job) {
+    d.ff_job = create_kill_on_close_job();
+    if (!d.ff_job) {
         log::warn("[local] ffmpeg fallback: CreateJobObject failed ({})", GetLastError());
         return false;
     }
 
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
     HANDLE rd = nullptr, wr = nullptr;
-    if (!CreatePipe(&rd, &wr, &sa, 1 << 20)) {
-        d->close_ff();
-        return false;
-    }
+    if (!CreatePipe(&rd, &wr, &sa, 1 << 20)) return false;
     SetHandleInformation(rd, 0, HANDLE_FLAG_INHERIT);
 
     HANDLE nul_in  = open_nul(GENERIC_READ);
@@ -282,26 +285,52 @@ bool LocalFileSource::open_track_ffmpeg(const std::filesystem::path& path) {
         quote(ff) + L" -hide_banner -loglevel error -nostdin -vn -i " + quote(path.wstring()) +
         L" -f s16le -acodec pcm_s16le -ar 48000 -ac 2 pipe:1";
 
-    d->ff_proc = spawn_in_job(d->ff_job, cmd, nul_in, wr, err_log);
-    const DWORD ec = d->ff_proc ? 0u : GetLastError();
+    d.ff_proc = spawn_in_job(d.ff_job, cmd, nul_in, wr, err_log);
+    const DWORD ec = d.ff_proc ? 0u : GetLastError();
     CloseHandle(wr);
     if (nul_in)  CloseHandle(nul_in);
     if (err_log) CloseHandle(err_log);
-    if (!d->ff_proc) {
+    if (!d.ff_proc) {
         CloseHandle(rd);
-        d->close_ff();
         log::warn("[local] ffmpeg fallback: failed to launch -- {}",
                   describe_launch_failure(ff, ec, !ffmpeg_path_.empty()));
-        return false;
+        return false;  // ~Decoder reaps the job
     }
 
-    d->ff_pipe = rd;
+    d.ff_pipe = rd;
     return true;
+}
+
+void LocalFileSource::discard_prefetch_locked() noexcept { prefetch_dec_.reset(); }
+
+std::size_t LocalFileSource::next_cursor_locked() const noexcept {
+    if (playlist_.empty()) return 0;
+    return (cursor_ + 1) % playlist_.size();
+}
+
+bool LocalFileSource::promote_prefetch_locked(std::size_t expected_cursor) {
+    if (!prefetch_dec_ || prefetch_dec_->for_cursor != expected_cursor) {
+        discard_prefetch_locked();
+        return false;
+    }
+    dec_    = std::move(prefetch_dec_);
+    cursor_ = dec_->for_cursor;
+    position_ms_.store(0, std::memory_order_release);
+    log::info("[local] now playing (prebuffered): {}", playlist_[cursor_].string());
+    return true;
+}
+
+void LocalFileSource::maybe_spawn_prefetch_locked() {
+    if (!prebuffer_next_.load(std::memory_order_acquire)) return;
+    if (prefetch_dec_ || !dec_ || playlist_.size() < 2) return;
+    // Local files (esp. miniaudio) open near-instantly, so no byte threshold is
+    // needed -- spawning on the first pump tick after a track change is cheap.
+    prefetch_dec_ = open_decoder_locked(next_cursor_locked());
 }
 
 void LocalFileSource::play() {
     std::scoped_lock lk{mu_};
-    if (!dec_->any_open() && !open_track(cursor_)) {
+    if ((!dec_ || !dec_->any_open()) && !open_track(cursor_)) {
         state_.store(PlaybackState::stopped, std::memory_order_release);
         return;
     }
@@ -312,14 +341,16 @@ void LocalFileSource::pause() { state_.store(PlaybackState::paused, std::memory_
 
 bool LocalFileSource::skip_next() {
     std::scoped_lock lk{mu_};
-    if (playlist_.empty() || !open_track(cursor_ + 1)) return false;
+    if (playlist_.empty()) return false;
+    const std::size_t next = next_cursor_locked();
+    if (!promote_prefetch_locked(next) && !open_track(next)) return false;
     state_.store(PlaybackState::playing, std::memory_order_release);
     return true;
 }
 
 bool LocalFileSource::restart_current() {
     std::scoped_lock lk{mu_};
-    if (!dec_->any_open()) return false;
+    if (!dec_ || !dec_->any_open()) return false;
     if (dec_->ma_open) {
         if (ma_decoder_seek_to_pcm_frame(&dec_->ma, 0) != MA_SUCCESS) return false;
     } else {
@@ -338,12 +369,16 @@ void LocalFileSource::stop() {
 
 void LocalFileSource::next() {
     std::scoped_lock lk{mu_};
-    open_track(cursor_ + 1);
+    if (playlist_.empty()) return;
+    const std::size_t next = next_cursor_locked();
+    if (!promote_prefetch_locked(next)) open_track(next);
     state_.store(PlaybackState::playing, std::memory_order_release);
 }
 
 void LocalFileSource::previous() {
     std::scoped_lock lk{mu_};
+    if (playlist_.empty()) return;   // size()-1 would underflow size_t
+    discard_prefetch_locked();       // prefetch targets cursor+1; previous() rewinds
     open_track(cursor_ == 0 ? playlist_.size() - 1 : cursor_ - 1);
     state_.store(PlaybackState::playing, std::memory_order_release);
 }
@@ -352,11 +387,15 @@ void LocalFileSource::pump(RingBuffer& ring) {
     if (state_.load(std::memory_order_acquire) != PlaybackState::playing) return;
 
     std::scoped_lock lk{mu_};
-    if (!dec_->any_open()) return;
+    if (!dec_ || !dec_->any_open()) return;
 
     const float rg = volume_norm_.load(std::memory_order_acquire)
-                         ? loudness_coef_.load(std::memory_order_acquire)
+                         ? dec_->loudness_coef
                          : 1.0f;
+    auto advance_at_eof = [&] {
+        const std::size_t next = next_cursor_locked();
+        if (!promote_prefetch_locked(next)) open_track(next);
+    };
 
     auto apply_dsp = [&](int16_t* samples, std::size_t frames) {
         if (rg != 1.0f) {
@@ -379,7 +418,7 @@ void LocalFileSource::pump(RingBuffer& ring) {
             if (ma_decoder_read_pcm_frames(&dec_->ma, scratch, kChunkFrames, &read) != MA_SUCCESS)
                 read = 0;
             if (read == 0) {
-                open_track(cursor_ + 1);
+                advance_at_eof();
                 return;
             }
             apply_dsp(scratch, static_cast<std::size_t>(read));
@@ -394,6 +433,7 @@ void LocalFileSource::pump(RingBuffer& ring) {
             const uint64_t played = cursor > queued ? cursor - queued : 0;
             position_ms_.store((played * 1000ull) / kSampleRate, std::memory_order_release);
         }
+        maybe_spawn_prefetch_locked();
         return;
     }
 
@@ -406,7 +446,7 @@ void LocalFileSource::pump(RingBuffer& ring) {
 
     if (dec_->ff_eof) {
         update_position();
-        if (ring.readable() == 0) open_track(cursor_ + 1);
+        if (ring.readable() == 0) advance_at_eof();
         return;
     }
 
@@ -439,11 +479,13 @@ void LocalFileSource::pump(RingBuffer& ring) {
         avail = avail > got ? avail - got : 0;
     }
     update_position();
+    maybe_spawn_prefetch_locked();
 }
 
 TrackInfo LocalFileSource::current_track() const {
     std::scoped_lock lk{mu_};
-    TrackInfo info   = dec_->info;
+    TrackInfo info;
+    if (dec_) info = dec_->info;
     info.position_ms = position_ms_.load(std::memory_order_acquire);
     return info;
 }
@@ -502,6 +544,12 @@ void LocalFileSource::set_ffmpeg_path(std::filesystem::path p) {
 void LocalFileSource::set_playback_options(const PlaybackConfig& opts) {
     volume_norm_.store(opts.volume_normalization, std::memory_order_release);
     eq_.set_options(opts.equalizer_enabled, opts.equalizer_bands, (float)kSampleRate);
+    const bool prev = prebuffer_next_.exchange(opts.prebuffer_next_track,
+                                                std::memory_order_acq_rel);
+    if (prev && !opts.prebuffer_next_track) {
+        std::scoped_lock lk{mu_};
+        discard_prefetch_locked();
+    }
 }
 
 std::vector<std::string> LocalFileSource::playlist_snapshot() const {

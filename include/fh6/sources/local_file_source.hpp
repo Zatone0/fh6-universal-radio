@@ -51,18 +51,27 @@ public:
     SourceCapabilities capabilities() const noexcept override { return {true, true, false}; }
 
 private:
+    struct Decoder; // pimpl, keeps miniaudio out of the header
+
     void rebuild_playlist();
-    bool open_track(std::size_t index);
-    bool open_track_ffmpeg(const std::filesystem::path& path);
+    // Open one decoder for playlist_[index] (miniaudio first, ffmpeg fallback).
+    // Returns nullptr if the file is unplayable / out of range.
+    std::unique_ptr<Decoder> open_decoder_locked(std::size_t index);
+    bool open_track_ffmpeg(Decoder& d, const std::filesystem::path& path);
+    bool open_track(std::size_t index);   // open + install as current
     void close_current();
+    void discard_prefetch_locked() noexcept;
+    bool promote_prefetch_locked(std::size_t expected_cursor);
+    void maybe_spawn_prefetch_locked();
+    std::size_t next_cursor_locked() const noexcept;
 
     LocalFilesConfig cfg_;
     std::filesystem::path ffmpeg_path_;
     std::vector<std::filesystem::path> playlist_;
     std::size_t cursor_ = 0;
 
-    struct Decoder; // pimpl, keeps miniaudio out of the header
     std::unique_ptr<Decoder> dec_;
+    std::unique_ptr<Decoder> prefetch_dec_;
 
     mutable std::mutex mu_;
     std::atomic<PlaybackState> state_{PlaybackState::stopped};
@@ -70,7 +79,7 @@ private:
 
     EqualizerStage eq_;
     std::atomic<bool> volume_norm_{true};
-    std::atomic<float> loudness_coef_{1.0f}; // per-track multiplier, computed in open_track()
+    std::atomic<bool> prebuffer_next_{true};
 };
 
 } // namespace fh6::sources

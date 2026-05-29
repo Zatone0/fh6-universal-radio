@@ -133,6 +133,7 @@ json config_to_json(const Config& c) {
              {"api_key", c.jellyfin.api_key},
              {"user_id", c.jellyfin.user_id},
              {"default_playlist", c.jellyfin.default_playlist},
+             {"use_favorites", c.jellyfin.use_favorites},
              {"shuffle", c.jellyfin.shuffle},
          }},
         {"external_audio",
@@ -152,6 +153,7 @@ json config_to_json(const Config& c) {
              {"equalizer_enabled", c.playback.equalizer_enabled},
              {"equalizer_bands", c.playback.equalizer_bands},
              {"force_stereo_audio", c.playback.force_stereo_audio},
+             {"prebuffer_next_track", c.playback.prebuffer_next_track},
          }},
     };
 }
@@ -199,6 +201,7 @@ void apply_patch(Config& c, const json& j) {
         c.jellyfin.api_key          = pull(*it, "api_key", c.jellyfin.api_key);
         c.jellyfin.user_id          = pull(*it, "user_id", c.jellyfin.user_id);
         c.jellyfin.default_playlist = pull(*it, "default_playlist", c.jellyfin.default_playlist);
+        c.jellyfin.use_favorites    = pull(*it, "use_favorites", c.jellyfin.use_favorites);
         c.jellyfin.shuffle          = pull(*it, "shuffle", c.jellyfin.shuffle);
     }
     if (auto it = j.find("external_audio"); it != j.end()) {
@@ -219,6 +222,8 @@ void apply_patch(Config& c, const json& j) {
             pull(*it, "volume_normalization", c.playback.volume_normalization);
         c.playback.force_stereo_audio =
             pull(*it, "force_stereo_audio", c.playback.force_stereo_audio);
+        c.playback.prebuffer_next_track =
+            pull(*it, "prebuffer_next_track", c.playback.prebuffer_next_track);
         c.playback.equalizer_enabled =
             pull(*it, "equalizer_enabled", c.playback.equalizer_enabled);
         if (auto bands = it->find("equalizer_bands");

@@ -58,20 +58,27 @@ public:
 private:
     struct Pipe;
 
-    void start_pipe_locked();   // mu_ held
-    void stop_pipe_locked();    // mu_ held
-    void resolve_queue_locked();// mu_ held; populates queue_ from target_url_
+    // mu_ held for all *_locked helpers.
+    std::unique_ptr<Pipe> spawn_pipe_locked(std::string_view url, std::size_t for_idx);
+    void start_pipe_locked();         // (re)spawn pipe_ for queue_[queue_idx_]
+    void stop_pipe_locked();          // drop pipe_ only
+    void discard_prefetch_locked() noexcept;
+    void resolve_queue_locked();      // populates queue_ from target_url_
+    std::size_t next_queue_idx_locked() const noexcept;
+    bool promote_prefetch_locked(std::size_t expected_idx);
+    void maybe_spawn_prefetch_locked();   // called from pump() once current is healthy
+    void drain_title_pipe_locked(Pipe* p);
 
     YouTubeMusicConfig cfg_;
     std::filesystem::path ffmpeg_path_;
     std::unique_ptr<Pipe> pipe_;
+    std::unique_ptr<Pipe> prefetch_;     // pre-spawned next-track pipeline (or null)
 
     mutable std::mutex mu_;
     std::string target_url_;
     std::vector<std::string> queue_;     // canonical watch URLs in playback order
     std::size_t queue_idx_ = 0;
     std::string queue_built_for_;        // value of target_url_ when queue_ was resolved
-    TrackInfo info_{};
     std::atomic<uint64_t> position_ms_{0};
     int consecutive_failed_ = 0;        // tracks-in-a-row that produced 0 PCM bytes
     AuthState auth_ = AuthState::none_required;
@@ -79,6 +86,7 @@ private:
 
     EqualizerStage eq_;
     std::atomic<bool> volume_norm_{true};
+    std::atomic<bool> prebuffer_next_{true};
 };
 
 } // namespace fh6::sources
