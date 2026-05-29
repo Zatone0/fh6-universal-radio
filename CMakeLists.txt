@@ -79,8 +79,7 @@ target_include_directories(version PRIVATE
     third_party/miniaudio
 )
 
-target_link_libraries(version PRIVATE ws2_32 bcrypt psapi winhttp)
-target_link_libraries(version PRIVATE ole32 uuid ksuser)
+target_link_libraries(version PRIVATE ws2_32 bcrypt psapi winhttp ole32 uuid ksuser)
 
 set_target_properties(version PROPERTIES
     OUTPUT_NAME version
