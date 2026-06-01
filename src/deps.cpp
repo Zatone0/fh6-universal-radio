@@ -1,6 +1,5 @@
 #include "fh6/deps.hpp"
 #include "fh6/log.hpp"
-#include "fh6/subprocess.hpp"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -18,26 +17,18 @@ namespace {
 
 struct ToolSpec {
     const char* name;
-    const wchar_t* out_name;       // final name under bin/
+    const wchar_t* out_name; // final name under bin/
     const wchar_t* url;
-    const char* sha256;            // lowercase hex, "" = skip verification
-    const wchar_t* archive_member; // L"" = raw exe, else file to lift out of a zip
+    const char* sha256;      // lowercase hex, "" = skip verification
 };
 
-// yt-dlp ships a bare exe and self-updates, so we track latest and skip the
-// hash. ffmpeg only exists as a zip upstream; BtbN's `latest` tag floats.
-// librespot has no upstream binary -- we build and host it (see
-// .github/workflows/librespot.yaml) under the `deps` release.
 constexpr std::array<ToolSpec, kToolCount> kSpecs{{
     {"ffmpeg", L"ffmpeg.exe",
-     L"https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
-     L"ffmpeg-master-latest-win64-gpl.zip",
-     "", L"ffmpeg.exe"},
+     L"https://github.com/g0ldyy/fh6-universal-radio/releases/download/deps/ffmpeg.exe", ""},
     {"yt-dlp", L"yt-dlp.exe",
-     L"https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe", "", L""},
+     L"https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe", ""},
     {"librespot", L"librespot.exe",
-     L"https://github.com/g0ldyy/fh6-universal-radio/releases/download/deps/librespot.exe",
-     "", L""},
+     L"https://github.com/g0ldyy/fh6-universal-radio/releases/download/deps/librespot.exe", ""},
 }};
 
 const ToolSpec& spec(Tool t) { return kSpecs[static_cast<std::size_t>(t)]; }
@@ -148,62 +139,6 @@ bool download(const std::wstring& url, const std::filesystem::path& out,
     return ok;
 }
 
-bool run_and_wait(const std::wstring& cmd) {
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-    std::wstring mut = cmd;
-    if (!CreateProcessW(nullptr, mut.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
-                        nullptr, &si, &pi))
-        return false;
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD ec = 1;
-    GetExitCodeProcess(pi.hProcess, &ec);
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return ec == 0;
-}
-
-// Pull one member out of a downloaded zip using the bsdtar bundled with
-// Windows 10 1803+ (System32\tar.exe), then drop it at dest.
-bool extract_member(const std::filesystem::path& zip, const std::wstring& member,
-                    const std::filesystem::path& dest, std::string& err) {
-    wchar_t sysdir[MAX_PATH];
-    UINT n = GetSystemDirectoryW(sysdir, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) { err = "no system dir"; return false; }
-    const std::wstring tar = std::wstring{sysdir, n} + L"\\tar.exe";
-
-    std::error_code ec;
-    const auto tmp = zip.parent_path() / "extract";
-    std::filesystem::remove_all(tmp, ec);
-    std::filesystem::create_directories(tmp, ec);
-
-    using subprocess::quote;
-    const std::wstring cmd = quote(tar) + L" -xf " + quote(zip.wstring()) + L" -C " +
-                             quote(tmp.wstring());
-    if (!run_and_wait(cmd)) {
-        std::filesystem::remove_all(tmp, ec);
-        err = "tar extraction failed";
-        return false;
-    }
-
-    bool moved = false;
-    std::filesystem::recursive_directory_iterator it{tmp, ec}, end;
-    for (; !ec && it != end; it.increment(ec)) {
-        if (it->is_regular_file(ec) && it->path().filename().wstring() == member) {
-            std::filesystem::remove(dest, ec);
-            std::filesystem::rename(it->path(), dest, ec);
-            if (ec) std::filesystem::copy_file(it->path(), dest,
-                                               std::filesystem::copy_options::overwrite_existing, ec);
-            moved = !ec;
-            break;
-        }
-    }
-    std::filesystem::remove_all(tmp, ec);
-    if (!moved) err = "member not found in archive";
-    return moved;
-}
-
 } // namespace
 
 DependencyManager::DependencyManager(std::filesystem::path bin_dir) : bin_dir_{std::move(bin_dir)} {
@@ -251,8 +186,7 @@ void DependencyManager::run_worker() {
         }
         log::info("[deps] downloading {}", sp.name);
 
-        const bool is_archive = sp.archive_member[0] != L'\0';
-        const auto dl   = bin_dir_ / (std::wstring{sp.out_name} + (is_archive ? L".zip" : L".part"));
+        const auto dl = bin_dir_ / (std::wstring{sp.out_name} + L".part");
         std::string sha, err;
         bool ok = download(sp.url, dl, s.downloaded, s.total, sha, stop_, err);
 
@@ -260,10 +194,7 @@ void DependencyManager::run_worker() {
             ok  = false;
             err = "checksum mismatch";
         }
-        if (ok && is_archive) {
-            ok = extract_member(dl, sp.archive_member, out_path, err);
-            std::filesystem::remove(dl, ec);
-        } else if (ok) {
+        if (ok) {
             std::filesystem::rename(dl, out_path, ec);
             if (ec) { ok = false; err = ec.message(); }
         }
