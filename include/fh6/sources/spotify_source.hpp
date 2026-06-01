@@ -37,15 +37,16 @@ public:
     }
     AuthState auth_state() const noexcept override;
     std::string auth_instructions() const override;
-    SourceCapabilities capabilities() const noexcept override { 
-        return {false, true, false};
+    SourceCapabilities capabilities() const noexcept override {
+        return {/*seek*/ false, /*previous*/ true, /*queue*/ false};
     }
 
 private:
     struct Pipe;
 
-    void start_pipe_locked();   // mu_ held
-    void stop_pipe_locked();    // mu_ held
+    void start_pipe_locked();           // mu_ held
+    void stop_pipe_locked();            // mu_ held
+    void transport_skip(bool forward);  // shared next()/previous() body
     bool cache_exists() const;
 
     SpotifyConfig cfg_;

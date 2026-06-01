@@ -51,7 +51,6 @@ enabled            = false
 librespot_path     = ''                # blank = `librespot` on PATH
 cache_dir          = 'spotify_cache'   # folder to save the Spotify Connect auth data
 
-
 [audio]
 output_gain = 1.0
 

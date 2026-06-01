@@ -8,11 +8,32 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
-#include <vector>
 
 namespace fh6::sources {
 
 namespace {
+
+// 48 kHz * 2 ch * 2 bytes = 192 000 B/s, so PCM position maps to time at 192 B/ms.
+constexpr uint64_t    kBytesPerMs          = 192;
+constexpr std::size_t kMaxBufferBytes      = 28800;  // 150 ms of in-flight PCM
+constexpr std::size_t kPipeChunk           = 4096;   // OS-minimum pipe / read granularity
+// A track-load event arriving while the previous track is still this far from
+// its end means the user skipped inside the Spotify app -- adopt it at once.
+constexpr uint64_t    kExternalSkipGuardMs = 32000;
+
+std::filesystem::path stderr_log_path() {
+    return std::filesystem::temp_directory_path() / "fh6-spotify-stderr.log";
+}
+
+// Press-and-release one extended media key (next/prev fallback).
+void send_media_key(WORD vk) {
+    INPUT ip[2]      = {};
+    ip[0].type       = ip[1].type = INPUT_KEYBOARD;
+    ip[0].ki.wVk     = ip[1].ki.wVk = vk;
+    ip[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
+    ip[1].ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
+    SendInput(2, ip, sizeof(INPUT));
+}
 
 // CreateProcess hands one string to the child via GetCommandLineW
 std::wstring quote(const std::wstring& s) {
@@ -38,15 +59,10 @@ HANDLE open_nul(DWORD access) {
 // tee stderr to temp folder for debugging
 HANDLE open_stderr_log() {
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
-    auto path = std::filesystem::temp_directory_path() / "fh6-spotify-stderr.log";
-    HANDLE h  = CreateFileW(path.wstring().c_str(), FILE_APPEND_DATA | SYNCHRONIZE,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &sa, OPEN_ALWAYS,
-                            FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE h = CreateFileW(stderr_log_path().wstring().c_str(), FILE_APPEND_DATA | SYNCHRONIZE,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &sa, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
     return h == INVALID_HANDLE_VALUE ? open_nul(GENERIC_WRITE) : h;
-}
-
-std::filesystem::path stderr_log_path() {
-    return std::filesystem::temp_directory_path() / "fh6-spotify-stderr.log";
 }
 
 // Job Object with KILL_ON_JOB_CLOSE
@@ -107,10 +123,11 @@ struct SpotifySource::Pipe {
     // gapless & prefetch tracking
     std::string pending_title;
     uint64_t pending_duration_ms = 0;
-    uint64_t track_duration_ms = 0; 
+    uint64_t track_duration_ms = 0;
     bool has_pending = false;
     int stall_ticks = 0;
     bool force_next_metadata = false;
+    bool awaiting_first_track = true; // no real track adopted yet
 
     ~Pipe() {
         if (read_pipe)  CloseHandle(read_pipe);
@@ -127,7 +144,10 @@ SpotifySource::SpotifySource(SpotifyConfig cfg, std::filesystem::path ffmpeg_pat
     info_.artist = "Spotify Connect";
 }
 
-SpotifySource::~SpotifySource() { stop_pipe_locked(); }
+SpotifySource::~SpotifySource() {
+    std::scoped_lock lk{mu_};
+    stop_pipe_locked();
+}
 
 bool SpotifySource::initialize() {
     if (!cfg_.enabled) return false;
@@ -156,7 +176,7 @@ AuthState SpotifySource::auth_state() const noexcept {
 std::string SpotifySource::auth_instructions() const {
     return "1. Ensure your PC and phone are on the same Wi-Fi network.\n"
            "2. Open the Spotify app on your phone.\n"
-           "3. Tap the 'Devices' icon and select 'FH6 Radio'.\n"
+           "3. Tap the 'Devices' icon and select 'FH6 Universal Radio'.\n"
            "Once connected, credentials will automatically save to the cache folder.";
 }
 
@@ -202,7 +222,7 @@ void SpotifySource::start_pipe_locked() {
     const auto cache = cfg_.cache_dir.wstring();
 
     std::wstring spot_cmd = quote(spot) + 
-                            L" --name \"FH6 Radio\"" +
+                            L" --name \"FH6 Universal Radio\"" +
                             L" --bitrate 320" +
                             L" --backend pipe" +
                             L" --initial-volume 100" +
@@ -223,15 +243,16 @@ void SpotifySource::start_pipe_locked() {
 
     // pass spot_err_w to librespot instead of the raw file
     pipe->proc_spot = spawn_in_job(pipe->job, spot_cmd, nul_in, spot_out_w, spot_err_w);
-    SetEnvironmentVariableW(L"RUST_LOG", nullptr); 
+    SetEnvironmentVariableW(L"RUST_LOG", nullptr);
+    // librespot owns its inherited stdin/stdout/stderr now; drop the parent copies.
     CloseHandle(spot_out_w); spot_out_w = nullptr;
     CloseHandle(spot_err_w); spot_err_w = nullptr;
-    
+    if (nul_in) { CloseHandle(nul_in); nul_in = nullptr; }
+
     if (!pipe->proc_spot) {
         log::warn("[spotify] failed to launch librespot ({}) -- check {}", GetLastError(),
                   stderr_log_path().string());
         bail();
-        if (nul_in)  CloseHandle(nul_in);
         return;
     }
 
@@ -244,7 +265,6 @@ void SpotifySource::start_pipe_locked() {
         log::warn("[spotify] failed to launch ffmpeg ({}) -- check {}", GetLastError(),
                   stderr_log_path().string());
         bail(); // clean up unassigned pipe handles
-        if (nul_in)   CloseHandle(nul_in);
         return;
     }
 
@@ -280,57 +300,24 @@ void SpotifySource::stop() {
     stop_pipe_locked();
 }
 
-void SpotifySource::next() {
-    // attempt background SMTC control first
-    if (!external_audio_media_session_next("")) {
-        // fallback: emulate OS media next with extended keys
-        INPUT ip[2] = {};
-        ip[0].type = INPUT_KEYBOARD;
-        ip[0].ki.wVk = VK_MEDIA_NEXT_TRACK;
-        ip[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
-        
-        ip[1].type = INPUT_KEYBOARD;
-        ip[1].ki.wVk = VK_MEDIA_NEXT_TRACK;
-        ip[1].ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
-        
-        SendInput(2, ip, sizeof(INPUT));
-    }
+void SpotifySource::transport_skip(bool forward) {
+    // Prefer background SMTC control; fall back to synthesizing the media key.
+    const bool sent = forward ? external_audio_media_session_next("")
+                              : external_audio_media_session_previous("");
+    if (!sent) send_media_key(forward ? VK_MEDIA_NEXT_TRACK : VK_MEDIA_PREV_TRACK);
 
     std::scoped_lock lk{mu_};
     if (pipe_) {
-        pipe_->bytes_consumed = 0;
-        pipe_->has_pending = false; // clear any queued prefetch
-        pipe_->track_duration_ms = 0; // prevent waiting for old duration
-        pipe_->force_next_metadata = true; // force parser to update immediately
+        pipe_->bytes_consumed      = 0;
+        pipe_->has_pending         = false; // clear any queued prefetch
+        pipe_->track_duration_ms   = 0;     // don't wait on the old duration
+        pipe_->force_next_metadata = true;  // adopt the next track immediately
     }
     info_.position_ms = 0;
 }
 
-void SpotifySource::previous() {
-    // attempt background SMTC control first
-    if (!external_audio_media_session_previous("")) {
-        // fallback: emulate OS media prev with extended keys
-        INPUT ip[2] = {};
-        ip[0].type = INPUT_KEYBOARD;
-        ip[0].ki.wVk = VK_MEDIA_PREV_TRACK;
-        ip[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
-        
-        ip[1].type = INPUT_KEYBOARD;
-        ip[1].ki.wVk = VK_MEDIA_PREV_TRACK;
-        ip[1].ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
-        
-        SendInput(2, ip, sizeof(INPUT));
-    }
-
-    std::scoped_lock lk{mu_};
-    if (pipe_) {
-        pipe_->bytes_consumed = 0;
-        pipe_->has_pending = false; // clear any queued prefetch
-        pipe_->track_duration_ms = 0; // prevent waiting for old duration
-        pipe_->force_next_metadata = true; // force parser to update immediately
-    }
-    info_.position_ms = 0;
-}
+void SpotifySource::next() { transport_skip(true); }
+void SpotifySource::previous() { transport_skip(false); }
 
 TrackInfo SpotifySource::current_track() const {
     std::scoped_lock lk{mu_};
@@ -385,7 +372,7 @@ void SpotifySource::pump(RingBuffer& ring) {
                     if (end != std::string::npos) {
                         try {
                             uint64_t parsed_seek = std::stoull(line.substr(seek_pos + seek_marker.length(), end - (seek_pos + seek_marker.length())));
-                            p->bytes_consumed = parsed_seek * 192; // 192 bytes per ms
+                            p->bytes_consumed = parsed_seek * kBytesPerMs;
                         } catch (...) {}
                         continue; // parsed successfully, move to next line
                     }
@@ -410,20 +397,23 @@ void SpotifySource::pump(RingBuffer& ring) {
                             } catch (...) {}
                         }
 
-                        // calculate if this is a manual skip from the app
-                        // 32 seconds = 32,000 ms = 6,144,000 bytes
-                        uint64_t track_bytes = p->track_duration_ms * 192;
-                        bool is_external_skip = (p->track_duration_ms > 0) && (p->bytes_consumed + 6144000 < track_bytes);
+                        // A load event while we're still >32 s from the current
+                        // track's end means a manual in-app skip -- adopt it now.
+                        const uint64_t track_bytes = p->track_duration_ms * kBytesPerMs;
+                        const bool is_external_skip =
+                            p->track_duration_ms > 0 &&
+                            p->bytes_consumed + kExternalSkipGuardMs * kBytesPerMs < track_bytes;
 
-                        // if initial playback, manually requested a skip or early external skip, apply immediately
-                        if (info_.title == "Ready to Cast" || info_.title == "Streaming via Spotify Connect" || p->force_next_metadata || is_external_skip) {
+                        // First track, an explicit skip, or an in-app skip: apply at once.
+                        if (p->awaiting_first_track || p->force_next_metadata || is_external_skip) {
                             info_.title = parsed_title;
                             info_.artist = "Spotify Connect";
                             info_.duration_ms = parsed_duration;
-                            p->track_duration_ms = parsed_duration; 
+                            p->track_duration_ms = parsed_duration;
                             p->bytes_consumed = 0;
-                            p->force_next_metadata = false; // reset flag
-                            p->has_pending = false; // clear just in case
+                            p->awaiting_first_track = false;
+                            p->force_next_metadata = false;
+                            p->has_pending = false;
                             p->stall_ticks = 0;
                         } else {
                             // queue it for the gapless transition
@@ -437,16 +427,9 @@ void SpotifySource::pump(RingBuffer& ring) {
         }
     }
 
-    // if paused, stop executing here
-    // the 4KB pipe will fill instantly, blocking ffmpeg and librespot
-    // pauses the stream and prevents time desync
-    if (!is_playing) {
-        return; 
-    }
-
-    // cap the ring buffer at 0.15 seconds (150ms)
-    // 48000Hz * 2ch * 2 bytes * 0.15s = 28800 bytes
-    const std::size_t MAX_BUFFER_BYTES = 28800;
+    // Paused: stop draining. The 4 KB pipe fills almost immediately, which
+    // back-pressures ffmpeg and librespot -- so playback pauses without desync.
+    if (!is_playing) return;
 
     DWORD avail = 0;
     if (!PeekNamedPipe(p->read_pipe, nullptr, 0, nullptr, &avail, nullptr)) {
@@ -476,63 +459,47 @@ void SpotifySource::pump(RingBuffer& ring) {
         p->stall_ticks = 0;
     }
 
-    // natural gapless transition (192 bytes = 1 millisecond)
+    // natural gapless transition
     if (p->has_pending && p->track_duration_ms > 0) {
-        uint64_t track_bytes = p->track_duration_ms * 192;
+        uint64_t track_bytes = p->track_duration_ms * kBytesPerMs;
         if (p->bytes_consumed >= track_bytes) {
             info_.title = p->pending_title;
             info_.duration_ms = p->pending_duration_ms;
             p->track_duration_ms = p->pending_duration_ms;
-            
-            // subtract to carry the remainder (keeps timer perfect)
-            p->bytes_consumed -= track_bytes; 
+
+            // carry the remainder so the timer stays exact
+            p->bytes_consumed -= track_bytes;
             p->has_pending = false;
             p->stall_ticks = 0;
         }
     }
-    
+
     while (avail > 0) {
-        std::size_t want = (std::size_t)avail;
-        
-        if (ring.readable() >= MAX_BUFFER_BYTES) break;
+        const std::size_t buffered = ring.readable();
+        if (buffered >= kMaxBufferBytes) break;
 
         const std::size_t writable = ring.writable();
         if (writable < 4) break;
-        
-        want = std::min<std::size_t>(writable, want);
-        
-        // do not read more than what keeps us under the buffer limit
-        std::size_t allowed = MAX_BUFFER_BYTES - ring.readable();
-        if (want > allowed) want = allowed;
-    
-        if (want > 4096) want = 4096;
-        
-        std::byte buf[4096];
+
+        std::size_t want = std::min<std::size_t>({static_cast<std::size_t>(avail), writable,
+                                                  kMaxBufferBytes - buffered, kPipeChunk});
+
+        std::byte buf[kPipeChunk];
         DWORD got = 0;
-        if (!ReadFile(p->read_pipe, buf, (DWORD)want, &got, nullptr) || got == 0) {
+        if (!ReadFile(p->read_pipe, buf, static_cast<DWORD>(want), &got, nullptr) || got == 0) {
             p->ended = true;
             return;
         }
-        
-        // only pump to the game engine and tick the timer if playing
-        if (is_playing) {
-            ring.write(buf, got);
-            p->bytes_consumed += got; // track exact bytes pushed to stream
-        }
-        
-       
+
+        ring.write(buf, got);
+        p->bytes_consumed += got; // track exact bytes pushed to the stream
         avail = avail > got ? avail - got : 0;
     }
 
-    // UI timer sync calculation
-    // 48000 Hz * 2 channels * 16-bit (2 bytes) = 192,000 bytes/sec -> 192 bytes/ms
-    uint64_t total_played = p->bytes_consumed;
-    uint64_t unplayed_latency = ring.readable();
-    
-    if (total_played > unplayed_latency) {
-        info_.position_ms = (total_played - unplayed_latency) / 192;
-    } else {
-        info_.position_ms = 0;
-    }
+    // UI timer = bytes pushed minus what's still queued ahead in the ring.
+    const uint64_t unplayed = ring.readable();
+    info_.position_ms =
+        p->bytes_consumed > unplayed ? (p->bytes_consumed - unplayed) / kBytesPerMs : 0;
 }
+
 } // namespace fh6::sources
