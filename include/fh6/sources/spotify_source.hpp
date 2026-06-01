@@ -24,6 +24,9 @@ public:
     bool initialize() override;
     void shutdown() noexcept override;
 
+    // Settings drawer hot-update; new paths apply on the next pipe start.
+    void set_config(SpotifyConfig cfg, std::filesystem::path ffmpeg_path);
+
     void play() override;
     void pause() override;
     void stop() override;

@@ -39,10 +39,16 @@ void send_media_key(WORD vk) {
 std::wstring quote(const std::wstring& s) {
     if (s.empty()) return L"\"\"";
     if (s.find_first_of(L" \t\"") == std::wstring::npos) return s;
+    // CommandLineToArgvW rules: a run of backslashes is literal unless it
+    // precedes a '"' (or the closing quote), in which case each backslash must
+    // be doubled -- otherwise a trailing backslash escapes our closing quote.
     std::wstring out{L"\""};
-    for (auto c : s) {
-        if (c == L'"') out += L'\\';
-        out += c;
+    for (std::size_t i = 0; i < s.size();) {
+        std::size_t bs = 0;
+        while (i < s.size() && s[i] == L'\\') { ++bs; ++i; }
+        if (i == s.size())      out.append(bs * 2, L'\\');
+        else if (s[i] == L'"') { out.append(bs * 2 + 1, L'\\'); out += s[i++]; }
+        else                   { out.append(bs, L'\\');         out += s[i++]; }
     }
     out += L'"';
     return out;
@@ -151,12 +157,26 @@ SpotifySource::~SpotifySource() {
 
 bool SpotifySource::initialize() {
     if (!cfg_.enabled) return false;
-    
-    // ensure cache directory exists
+
+    // librespot stores credentials here; a cache dir we can't create means
+    // auth can never persist, so fail fast rather than run half-configured.
     std::error_code ec;
     std::filesystem::create_directories(cfg_.cache_dir, ec);
-    
+    if (ec) {
+        log::warn("[spotify] cannot create cache dir {} ({})", cfg_.cache_dir.string(),
+                  ec.message());
+        return false;
+    }
     return true;
+}
+
+void SpotifySource::set_config(SpotifyConfig cfg, std::filesystem::path ffmpeg_path) {
+    // Stored only; a live pipe keeps its current paths and picks the new ones up
+    // on the next start. Restarting here would cut playback on unrelated config
+    // saves (the dashboard fires on_change for any field change).
+    std::scoped_lock lk{mu_};
+    cfg_         = std::move(cfg);
+    ffmpeg_path_ = std::move(ffmpeg_path);
 }
 
 void SpotifySource::shutdown() noexcept {
@@ -166,7 +186,8 @@ void SpotifySource::shutdown() noexcept {
 
 bool SpotifySource::cache_exists() const {
     auto creds_path = cfg_.cache_dir / "credentials.json";
-    return std::filesystem::exists(creds_path);
+    std::error_code ec;
+    return std::filesystem::exists(creds_path, ec); // noexcept overload: auth_state() is noexcept
 }
 
 AuthState SpotifySource::auth_state() const noexcept {
@@ -204,17 +225,25 @@ void SpotifySource::start_pipe_locked() {
         if (ff_out_w) CloseHandle(ff_out_w);
     };
 
+    // Pipes are created inheritable (sa) but every end is cleared below except
+    // the three librespot inherits (its stdin/stdout/stderr). librespot is
+    // spawned first; if ffmpeg's stdout write end (ff_out_w) leaked into it, the
+    // read end would never see EOF when ffmpeg exits. The ffmpeg-side ends are
+    // re-enabled just before ffmpeg is spawned.
     // reduced pipe size to 4KB (OS minimum) to eliminate residual data backlog
     if (!CreatePipe(&spot_out_r, &spot_out_w, &sa, 4096)) { bail(); return; }
-    SetHandleInformation(spot_out_r, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+    SetHandleInformation(spot_out_r, HANDLE_FLAG_INHERIT, 0);
     // create error pipe and ensure read end isn't passed to children
     if (!CreatePipe(&spot_err_r, &spot_err_w, &sa, 4096)) { bail(); return; }
     SetHandleInformation(spot_err_r, HANDLE_FLAG_INHERIT, 0);
     if (!CreatePipe(&ff_out_r, &ff_out_w, &sa, 4096)) { bail(); return; }
     SetHandleInformation(ff_out_r, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(ff_out_w, HANDLE_FLAG_INHERIT, 0);
 
     HANDLE nul_in  = open_nul(GENERIC_READ);
     pipe->log_file = open_stderr_log(); // keep the log file open in our Pipe struct
+    if (pipe->log_file && pipe->log_file != INVALID_HANDLE_VALUE)
+        SetHandleInformation(pipe->log_file, HANDLE_FLAG_INHERIT, 0); // ffmpeg only, not librespot
 
     const auto spot = cfg_.librespot_path.empty() ? L"librespot" : cfg_.librespot_path.wstring();
     const std::wstring ff = ffmpeg_path_.empty() ? std::wstring{L"ffmpeg"}
@@ -256,6 +285,13 @@ void SpotifySource::start_pipe_locked() {
         return;
     }
 
+    // librespot has inherited only its own std handles; now expose the
+    // ffmpeg-side ends so ffmpeg (and only ffmpeg) inherits them.
+    SetHandleInformation(spot_out_r, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+    SetHandleInformation(ff_out_w, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+    if (pipe->log_file && pipe->log_file != INVALID_HANDLE_VALUE)
+        SetHandleInformation(pipe->log_file, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+
     // FFmpeg can keep logging to the file directly
     pipe->proc_ff = spawn_in_job(pipe->job, ff_cmd, spot_out_r, ff_out_w, pipe->log_file);
     CloseHandle(spot_out_r); spot_out_r = nullptr;
@@ -286,8 +322,10 @@ void SpotifySource::stop_pipe_locked() {
 
 void SpotifySource::play() {
     std::scoped_lock lk{mu_};
-    if (!pipe_) start_pipe_locked();
-    
+    // A dead stream (ffmpeg/librespot exited) leaves pipe_ set with ended=true;
+    // respawn so the user can recover without an explicit stop() first.
+    if (!pipe_ || pipe_->ended) start_pipe_locked();
+
     state_.store(PlaybackState::playing, std::memory_order_release);
 }
 

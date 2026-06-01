@@ -191,6 +191,9 @@ void run_bridge(HMODULE self) noexcept {
         if (auto* ext = dynamic_cast<sources::ExternalAudioSource*>(mgr.find("external_audio"))) {
             ext->set_config(c.external_audio);
         }
+        if (auto* sp = dynamic_cast<sources::SpotifySource*>(mgr.find("spotify"))) {
+            sp->set_config(c.spotify, c.general.ffmpeg_path);
+        }
 
         for (auto* s : mgr.sources_snapshot()) s->set_playback_options(c.playback);
         if (ctrl_ptr) ctrl_ptr->push_playback_options(c.playback);
