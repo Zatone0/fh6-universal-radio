@@ -1,4 +1,5 @@
 #include "fh6/sources/spotify_source.hpp"
+#include "fh6/sources/external_media_session.hpp"
 #include "fh6/log.hpp"
 
 #include <windows.h>
@@ -217,8 +218,12 @@ void SpotifySource::start_pipe_locked() {
                           L" -flush_packets 1" + 
                           L" -f s16le -acodec pcm_s16le -ar 48000 -ac 2 pipe:1";
 
+    // request debug logs for the player module to intercept Seek events
+    SetEnvironmentVariableW(L"RUST_LOG", L"librespot_playback::player=debug");
+
     // pass spot_err_w to librespot instead of the raw file
     pipe->proc_spot = spawn_in_job(pipe->job, spot_cmd, nul_in, spot_out_w, spot_err_w);
+    SetEnvironmentVariableW(L"RUST_LOG", nullptr); 
     CloseHandle(spot_out_w); spot_out_w = nullptr;
     CloseHandle(spot_err_w); spot_err_w = nullptr;
     
@@ -276,16 +281,20 @@ void SpotifySource::stop() {
 }
 
 void SpotifySource::next() {
-    // emulate OS media next
-    INPUT ip[2] = {};
-    ip[0].type = INPUT_KEYBOARD;
-    ip[0].ki.wVk = VK_MEDIA_NEXT_TRACK;
-    
-    ip[1].type = INPUT_KEYBOARD;
-    ip[1].ki.wVk = VK_MEDIA_NEXT_TRACK;
-    ip[1].ki.dwFlags = KEYEVENTF_KEYUP;
-    
-    SendInput(2, ip, sizeof(INPUT));
+    // attempt background SMTC control first
+    if (!external_audio_media_session_next("")) {
+        // fallback: emulate OS media next with extended keys
+        INPUT ip[2] = {};
+        ip[0].type = INPUT_KEYBOARD;
+        ip[0].ki.wVk = VK_MEDIA_NEXT_TRACK;
+        ip[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
+        
+        ip[1].type = INPUT_KEYBOARD;
+        ip[1].ki.wVk = VK_MEDIA_NEXT_TRACK;
+        ip[1].ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
+        
+        SendInput(2, ip, sizeof(INPUT));
+    }
 
     std::scoped_lock lk{mu_};
     if (pipe_) {
@@ -298,16 +307,20 @@ void SpotifySource::next() {
 }
 
 void SpotifySource::previous() {
-    // emulate OS media previous
-    INPUT ip[2] = {};
-    ip[0].type = INPUT_KEYBOARD;
-    ip[0].ki.wVk = VK_MEDIA_PREV_TRACK;
-    
-    ip[1].type = INPUT_KEYBOARD;
-    ip[1].ki.wVk = VK_MEDIA_PREV_TRACK;
-    ip[1].ki.dwFlags = KEYEVENTF_KEYUP;
-    
-    SendInput(2, ip, sizeof(INPUT));
+    // attempt background SMTC control first
+    if (!external_audio_media_session_previous("")) {
+        // fallback: emulate OS media prev with extended keys
+        INPUT ip[2] = {};
+        ip[0].type = INPUT_KEYBOARD;
+        ip[0].ki.wVk = VK_MEDIA_PREV_TRACK;
+        ip[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
+        
+        ip[1].type = INPUT_KEYBOARD;
+        ip[1].ki.wVk = VK_MEDIA_PREV_TRACK;
+        ip[1].ki.dwFlags = KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP;
+        
+        SendInput(2, ip, sizeof(INPUT));
+    }
 
     std::scoped_lock lk{mu_};
     if (pipe_) {
@@ -362,6 +375,20 @@ void SpotifySource::pump(RingBuffer& ring) {
                 // ignore the pre-fetch loading event
                 if (line.find("] Loading <") != std::string::npos) {
                     continue; 
+                }
+
+                // catch seek events from librespot to sync UI timer on scrub
+                const std::string seek_marker = "command=Seek(";
+                size_t seek_pos = line.find(seek_marker);
+                if (seek_pos != std::string::npos) {
+                    size_t end = line.find(")", seek_pos);
+                    if (end != std::string::npos) {
+                        try {
+                            uint64_t parsed_seek = std::stoull(line.substr(seek_pos + seek_marker.length(), end - (seek_pos + seek_marker.length())));
+                            p->bytes_consumed = parsed_seek * 192; // 192 bytes per ms
+                        } catch (...) {}
+                        continue; // parsed successfully, move to next line
+                    }
                 }
                 
                 // look for the track load event signature
@@ -427,11 +454,11 @@ void SpotifySource::pump(RingBuffer& ring) {
         return;
     }
 
-    if (avail == 0) {
+   if (avail == 0) {
         p->stall_ticks++;
-        // if pipe is dry for just 5 ticks (~80ms) and pending track,
-        // the user manually skipped during the final 30 seconds of the song
-        if (p->stall_ticks > 5 && p->has_pending) {
+        // if pipe is dry for just 5 ticks (~80ms)
+        if (p->stall_ticks > 5) {
+            // the user manually skipped during the final 30 seconds of the song
             if (p->has_pending) {
                 info_.title = p->pending_title;
                 info_.duration_ms = p->pending_duration_ms;
@@ -439,10 +466,10 @@ void SpotifySource::pump(RingBuffer& ring) {
                 
                 p->bytes_consumed = 0;
                 p->has_pending = false;
-            } // catch-all for extreme network lag / dead stream (stall for > 500ms)
-            else {
+            } 
+            // catch-all for extreme network lag / dead stream (stall for > 800ms)
+            else if (p->stall_ticks > 50) {
                 p->force_next_metadata = true;
-                p->bytes_consumed = 0; 
             }
         }
     } else {
