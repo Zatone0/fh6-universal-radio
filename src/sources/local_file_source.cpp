@@ -21,6 +21,7 @@
 #endif
 
 #include <algorithm>
+#include <fstream>
 #include <random>
 
 namespace fh6::sources {
@@ -44,6 +45,24 @@ bool extension_matches(const std::filesystem::path& p, const std::vector<std::st
     if (!e.empty() && e.front() == '.') e.erase(0, 1);
     std::ranges::transform(e, e.begin(), [](unsigned char c) { return (char)std::tolower(c); });
     return std::ranges::find(exts, e) != exts.end();
+}
+
+std::vector<std::filesystem::path> parse_m3u_playlist(const std::filesystem::path& file) {
+    std::vector<std::filesystem::path> out;
+    std::ifstream in(file);
+    if (!in) return out;
+    const auto dir = file.parent_path();
+    std::string line;
+    while (std::getline(in, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+            line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        std::filesystem::path p = std::filesystem::path{line};
+        if (p.is_relative()) p = dir / p;
+        std::error_code ec;
+        if (std::filesystem::exists(p, ec)) out.push_back(std::move(p));
+    }
+    return out;
 }
 
 struct ProbedMetadata {
@@ -248,7 +267,14 @@ void LocalFileSource::rebuild_playlist() {
     playlist_.clear();
     std::error_code ec;
     auto add = [&](const std::filesystem::path& p) {
-        if (extension_matches(p, cfg_.supported_formats)) playlist_.push_back(p);
+        const auto ext = p.extension().string();
+        if (ieq_str(ext, ".m3u") || ieq_str(ext, ".m3u8")) {
+            for (auto& entry : parse_m3u_playlist(p))
+                if (extension_matches(entry, cfg_.supported_formats))
+                    playlist_.push_back(std::move(entry));
+        } else if (extension_matches(p, cfg_.supported_formats)) {
+            playlist_.push_back(p);
+        }
     };
     if (cfg_.recursive) {
         for (const auto& e : std::filesystem::recursive_directory_iterator(
