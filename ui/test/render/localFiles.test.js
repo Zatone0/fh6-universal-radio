@@ -29,21 +29,21 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
-const ctx = (enabled, state = { sources: { available: [] } }) => ({
-  getState: () => state,
-  getConfig: () => ({ local_files: { enabled } }),
+const ctx = active => ({
+  getState: () => ({ sources: { active, available: [{ name: "local_files", details: {} }] } }),
+  getConfig: () => ({ local_files: { enabled: true } }),
   onSaved: async () => {},
 });
 
 describe("createLocalFiles", () => {
-  it("inserts the card hidden until local_files is enabled", () => {
-    const lf = createLocalFiles(document.querySelector("main"), ctx(false));
+  it("stays hidden until local_files is the active source", () => {
+    const lf = createLocalFiles(document.querySelector("main"), ctx("spotify"));
     lf.render();
     expect(document.getElementById("local-files-card").hidden).toBe(true);
   });
 
-  it("shows the card and loads stations when enabled", async () => {
-    const lf = createLocalFiles(document.querySelector("main"), ctx(true));
+  it("shows the card and loads stations when local_files is on air", async () => {
+    const lf = createLocalFiles(document.querySelector("main"), ctx("local_files"));
     lf.render();
     expect(document.getElementById("local-files-card").hidden).toBe(false);
     await new Promise(r => setTimeout(r, 0));

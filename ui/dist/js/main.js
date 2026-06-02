@@ -135,8 +135,10 @@ function render() {
   refs.outputCard.hidden = !state.sources?.active;
 
   const available = state.sources?.available || [];
-  refs.ytCard.hidden = !available.some(s => s.name === "youtube_music");
-  refs.jfCard.hidden = !available.some(s => s.name === "jellyfin");
+  const active = state.sources?.active;
+  // Source-specific cards only show while that source is on air.
+  refs.ytCard.hidden = active !== "youtube_music";
+  refs.jfCard.hidden = active !== "jellyfin";
   const shuffleOn = !!available.find(s => s.name === "youtube_music")?.details?.shuffle;
   refs.ytShuffle.classList.toggle("toggled", shuffleOn);
   refs.ytShuffle.setAttribute("aria-pressed", String(shuffleOn));

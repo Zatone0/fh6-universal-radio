@@ -439,13 +439,13 @@ export function createLocalFiles(main, ctx) {
   let lastTrackCount = -1;
   let lastIndexVersion = -1;
   function render() {
-    const enabled = !!ctx.getConfig()?.local_files?.enabled;
-    card.hidden = !enabled;
-    if (!enabled) return;
+    const state = ctx.getState();
+    const isActive = state?.sources?.active === "local_files";
+    card.hidden = !isActive;
+    if (!isActive) return;
     load();
     // Refresh the queue (titles, artists, current-track highlight) when the
     // track count changes (rescan) or the metadata index advances.
-    const state = ctx.getState();
     const lf = state?.sources?.available?.find(s => s.name === "local_files");
     const tc = lf?.details?.track_count ?? -1;
     const iv = lf?.details?.index_version ?? -1;
