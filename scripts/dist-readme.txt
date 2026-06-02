@@ -53,9 +53,11 @@ Prompt to find it.
 
 From there:
 
-  * Local files: give it a folder full of MP3, FLAC, WAV, OGG, M4A,
-    AAC, OPUS, M3U, M3U8 or WMA tracks. Subfolders are scanned too. Shuffle,
-    skip, and volume controls are all in the UI.
+  * Local files: build "stations" from one or more folders of MP3, FLAC,
+    WAV, OGG, M4A, AAC, OPUS, M3U, M3U8 or WMA tracks. Subfolders are
+    scanned too, and you can uncheck the ones you don't want. Pick a play
+    order (shuffle / albums / name / folder), a repeat mode, and browse or
+    search the queue.
 
   * YouTube Music: paste a video URL, a playlist, or a YT Music
     link.

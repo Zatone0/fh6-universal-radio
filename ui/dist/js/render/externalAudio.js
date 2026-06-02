@@ -83,9 +83,10 @@ export function createExternalAudio(main, ctx) {
 
   function render() {
     const state = ctx.getState();
-    const enabled = !!ctx.getConfig()?.external_audio?.enabled;
-    card.hidden = !enabled;
-    if (!enabled) return;
+    // Only show the External Audio card while it's the source on air.
+    const onAir = state?.sources?.active === "external_audio";
+    card.hidden = !onAir;
+    if (!onAir) return;
 
     load();
 

@@ -28,11 +28,21 @@ struct GeneralConfig {
     std::filesystem::path ffmpeg_path;  // empty = look up on PATH; shared by all sources
 };
 
+// A named preset of folders + playback rules.
+struct LocalStation {
+    std::string name;
+    std::vector<std::filesystem::path> roots;     // one or more scan roots
+    std::vector<std::filesystem::path> excluded;  // absolute folders; folder + descendants skipped
+    bool recursive       = true;
+    std::string order     = "shuffle";  // "shuffle" | "album" | "name" | "folder"
+    std::string grouping  = "folder";   // for order=="album": "folder" | "tags"
+    std::string repeat    = "all";      // "all" | "one" | "off"
+};
+
 struct LocalFilesConfig {
     bool enabled = true;
-    std::filesystem::path music_dir;
-    bool recursive = true;
-    bool shuffle   = true;
+    std::vector<LocalStation> stations;
+    std::string active_station;         // station name; empty/unknown => first station
     std::vector<std::string> supported_formats{"mp3",  "flac", "wav", "ogg",  "m4a",
                                                 "opus", "aac",  "wma", "aiff", "aif",
                                                 "m3u",  "m3u8"};
