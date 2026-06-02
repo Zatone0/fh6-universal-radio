@@ -40,6 +40,19 @@ void send_media_key(WORD vk) {
     SendInput(2, ip, sizeof(INPUT));
 }
 
+// Undo Rust's `{:?}` string escaping for the common cases that appear in
+// track/album/artist names (\" and \\); other escapes keep their literal char.
+std::string unescape_debug(const std::string& s) {
+    if (s.find('\\') == std::string::npos) return s;
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) ++i;
+        out.push_back(s[i]);
+    }
+    return out;
+}
+
 std::string spotify_uri_to_url(std::string uri) {
     if (uri.rfind("spotify:", 0) == 0) uri.erase(0, 8);
     std::replace(uri.begin(), uri.end(), ':', '/');
@@ -153,12 +166,21 @@ struct SpotifySource::Pipe {
     std::string loading_uri;   // Spotify URI from the most recent "Loading <...>" line
     std::string pending_uri;   // URI paired with pending_title
     std::string pending_title;
+    std::string pending_artist;
+    std::string pending_album;
     uint64_t pending_duration_ms = 0;
     uint64_t track_duration_ms = 0;
     bool has_pending = false;
     int stall_ticks = 0;
     bool force_next_metadata = false;
     bool awaiting_first_track = true; // no real track adopted yet
+
+    enum class MetaContext { None, Track, Album, Artist };
+    MetaContext meta_context = MetaContext::None;
+    bool expecting_name = false;
+    std::string next_meta_title;
+    std::string next_meta_artist;
+    std::string next_meta_album;
 
     ~Pipe() {
         if (read_pipe)  CloseHandle(read_pipe);
@@ -339,8 +361,8 @@ void SpotifySource::start_pipe_locked() {
                           L" -flush_packets 1" + 
                           L" -f s16le -acodec pcm_s16le -ar 48000 -ac 2 pipe:1";
 
-    // request debug logs for the player module to intercept Seek events
-    SetEnvironmentVariableW(L"RUST_LOG", L"librespot_playback::player=debug");
+    // request debug logs for the player module to intercept Seek events & metadata
+    SetEnvironmentVariableW(L"RUST_LOG", L"librespot_playback::player=debug,librespot_metadata=trace");
 
     // pass spot_err_w to librespot instead of the raw file
     pipe->proc_spot = spawn_in_job(pipe->job, spot_cmd, nul_in, spot_out_w, spot_err_w);
@@ -382,6 +404,7 @@ void SpotifySource::start_pipe_locked() {
 
     info_.title = "Streaming via Spotify Connect";
     info_.artist = "Spotify";
+    info_.album.clear();
     info_.artwork_url.clear();
     info_uri_.clear();
     state_.store(PlaybackState::playing, std::memory_order_release);
@@ -445,6 +468,18 @@ void SpotifySource::pump(RingBuffer& ring) {
     // check if currently playing or paused
     bool is_playing = (state_.load(std::memory_order_acquire) == PlaybackState::playing);
 
+    // Adopt a track's metadata into the now-playing info and kick off its cover.
+    auto apply_info = [&](const std::string& title, const std::string& artist,
+                          const std::string& album, uint64_t dur, const std::string& uri) {
+        info_.title          = title;
+        info_.artist         = artist;
+        info_.album          = album;
+        info_.duration_ms    = dur;
+        p->track_duration_ms = dur;
+        p->has_pending       = false;
+        request_artwork_locked(uri);
+    };
+
     // non-blocking parse of track metadata
     if (p->err_pipe) {
         DWORD err_avail = 0;
@@ -453,12 +488,6 @@ void SpotifySource::pump(RingBuffer& ring) {
             DWORD to_read = std::min<DWORD>(err_avail, (DWORD)sizeof(buf));
             DWORD got = 0;
             if (!ReadFile(p->err_pipe, buf, to_read, &got, nullptr) || got == 0) break;
-            
-            // tee the output to our log file so you can still check it on disk
-            if (p->log_file && p->log_file != INVALID_HANDLE_VALUE) {
-                DWORD w = 0;
-                WriteFile(p->log_file, buf, got, &w, nullptr);
-            }
             
             p->err_buf.append(buf, got);
             
@@ -470,6 +499,55 @@ void SpotifySource::pump(RingBuffer& ring) {
                 
                 // strip Windows carriage return if it exists
                 if (!line.empty() && line.back() == '\r') line.pop_back();
+
+                // detect if the line breaks out of the multiline metadata trace
+                if (!line.empty() && line[0] == '[') {
+                    if (line.find("TRACE librespot_metadata") == std::string::npos) {
+                        p->meta_context = Pipe::MetaContext::None;
+                    }
+                }
+
+                bool is_trace_start = line.find("TRACE librespot_metadata") != std::string::npos;
+                bool is_trace_block = is_trace_start || p->meta_context != Pipe::MetaContext::None;
+
+                if (!is_trace_block && p->log_file && p->log_file != INVALID_HANDLE_VALUE) {
+                    std::string out_line = line + "\r\n";
+                    DWORD w = 0;
+                    WriteFile(p->log_file, out_line.data(), static_cast<DWORD>(out_line.size()), &w, nullptr);
+                }
+
+                if (is_trace_start && line.find("Received metadata: Track {") != std::string::npos) {
+                    p->meta_context = Pipe::MetaContext::Track;
+                    p->next_meta_title.clear();
+                    p->next_meta_artist.clear();
+                    p->next_meta_album.clear();
+                    p->expecting_name = false;
+                } else if (p->meta_context != Pipe::MetaContext::None) {
+                    if (line.find("Album {") != std::string::npos) {
+                        p->meta_context = Pipe::MetaContext::Album;
+                    } else if (line.find("Artist {") != std::string::npos) {
+                        p->meta_context = Pipe::MetaContext::Artist;
+                    }
+
+                    if (line.find("name: Some(") != std::string::npos) {
+                        p->expecting_name = true;
+                    } else if (p->expecting_name) {
+                        size_t start = line.find_first_of('"');
+                        size_t end = line.find_last_of('"');
+                        if (start != std::string::npos && end != std::string::npos && start < end) {
+                            std::string val = unescape_debug(line.substr(start + 1, end - start - 1));
+
+                            if (p->meta_context == Pipe::MetaContext::Track && p->next_meta_title.empty()) {
+                                p->next_meta_title = val;
+                            } else if (p->meta_context == Pipe::MetaContext::Album && p->next_meta_album.empty()) {
+                                p->next_meta_album = val;
+                            } else if (p->meta_context == Pipe::MetaContext::Artist && p->next_meta_artist.empty()) {
+                                p->next_meta_artist = val;
+                            }
+                        }
+                        p->expecting_name = false;
+                    }
+                }
 
                 // Capture the URI from the "Loading <..>" line preceding each
                 // track's "loaded" line, to resolve its cover.
@@ -516,6 +594,10 @@ void SpotifySource::pump(RingBuffer& ring) {
                             } catch (...) {}
                         }
 
+                        std::string final_title = p->next_meta_title.empty() ? parsed_title : p->next_meta_title;
+                        std::string final_artist = p->next_meta_artist.empty() ? "Spotify Connect" : p->next_meta_artist;
+                        std::string final_album = p->next_meta_album; // can be empty
+
                         // A load event while we're still >32 s from the current
                         // track's end means a manual in-app skip -- adopt it now.
                         const uint64_t track_bytes = p->track_duration_ms * kBytesPerMs;
@@ -525,19 +607,17 @@ void SpotifySource::pump(RingBuffer& ring) {
 
                         // First track, an explicit skip, or an in-app skip: apply at once.
                         if (p->awaiting_first_track || p->force_next_metadata || is_external_skip) {
-                            info_.title = parsed_title;
-                            info_.artist = "Spotify Connect";
-                            info_.duration_ms = parsed_duration;
-                            p->track_duration_ms = parsed_duration;
+                            apply_info(final_title, final_artist, final_album,
+                                       parsed_duration, p->loading_uri);
                             p->bytes_consumed = 0;
                             p->awaiting_first_track = false;
                             p->force_next_metadata = false;
-                            p->has_pending = false;
                             p->stall_ticks = 0;
-                            request_artwork_locked(p->loading_uri);
                         } else {
                             // queue it for the gapless transition
-                            p->pending_title = parsed_title;
+                            p->pending_title = final_title;
+                            p->pending_artist = final_artist;
+                            p->pending_album = final_album;
                             p->pending_duration_ms = parsed_duration;
                             p->pending_uri = p->loading_uri;
                             p->has_pending = true;
@@ -564,13 +644,9 @@ void SpotifySource::pump(RingBuffer& ring) {
         if (p->stall_ticks > 5) {
             // the user manually skipped during the final 30 seconds of the song
             if (p->has_pending) {
-                info_.title = p->pending_title;
-                info_.duration_ms = p->pending_duration_ms;
-                p->track_duration_ms = p->pending_duration_ms;
-
+                apply_info(p->pending_title, p->pending_artist, p->pending_album,
+                           p->pending_duration_ms, p->pending_uri);
                 p->bytes_consumed = 0;
-                p->has_pending = false;
-                request_artwork_locked(p->pending_uri);
             }
             // catch-all for extreme network lag / dead stream (stall for > 800ms)
             else if (p->stall_ticks > 50) {
@@ -585,15 +661,11 @@ void SpotifySource::pump(RingBuffer& ring) {
     if (p->has_pending && p->track_duration_ms > 0) {
         uint64_t track_bytes = p->track_duration_ms * kBytesPerMs;
         if (p->bytes_consumed >= track_bytes) {
-            info_.title = p->pending_title;
-            info_.duration_ms = p->pending_duration_ms;
-            p->track_duration_ms = p->pending_duration_ms;
-
+            apply_info(p->pending_title, p->pending_artist, p->pending_album,
+                       p->pending_duration_ms, p->pending_uri);
             // carry the remainder so the timer stays exact
             p->bytes_consumed -= track_bytes;
-            p->has_pending = false;
             p->stall_ticks = 0;
-            request_artwork_locked(p->pending_uri);
         }
     }
 
