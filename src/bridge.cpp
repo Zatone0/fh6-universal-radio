@@ -167,10 +167,14 @@ void run_bridge(HMODULE self) noexcept {
 
     if (!mgr.switch_to(cfg.general.default_source) && !mgr.switch_to(cfg.general.fallback_source)) {
         auto snap = mgr.sources_snapshot();
-        if (snap.size() == 1) {
-            mgr.switch_to(snap[0]->name());
+        if (snap.empty()) {
+            log::warn("[bridge] no sources registered");
+        } else if (snap.size() == 1) {
+            if (!mgr.switch_to(snap[0]->name()))
+                log::error("[bridge] failed to switch to sole registered source '{}'", snap[0]->name());
         } else {
-            log::warn("[bridge] neither default nor fallback source was registered");
+            log::warn("[bridge] configured default/fallback sources not found among {} registered sources",
+                      snap.size());
         }
     }
 
@@ -192,7 +196,10 @@ void run_bridge(HMODULE self) noexcept {
         if (!mgr.active()) {
             if (!mgr.switch_to(c.general.default_source) && !mgr.switch_to(c.general.fallback_source)) {
                 auto snap = mgr.sources_snapshot();
-                if (snap.size() == 1) mgr.switch_to(snap[0]->name());
+                if (snap.size() == 1) {
+                    if (!mgr.switch_to(snap[0]->name()))
+                        log::error("[bridge] failed to switch to sole registered source '{}'", snap[0]->name());
+                }
             }
         }
 
