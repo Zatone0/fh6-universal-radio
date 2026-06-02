@@ -12,8 +12,7 @@ namespace {
 using namespace std::chrono_literals;
 constexpr auto kTick           = 20ms;
 constexpr auto kDiscoveryRetry = 5s;
-constexpr int kDiscoveryTries  = 120; // 10-minute budget; the radio system
-                                      // isn't wired up until well into launch.
+
 
 // Ticks of no read_callback progress (while the source is producing PCM)
 // before we conclude the game tore the radio channel down. 1s @ 20ms.

@@ -203,10 +203,10 @@ void WorkerClient::kill_pipeline(uint32_t id) {
     std::scoped_lock lk{mu_};
     if (pipe_ == INVALID_HANDLE_VALUE) return;
     json req = {{"op", "kill"}, {"id", id}};
-    // Fire-and-forget: send but don't wait for response (pipeline might
-    // already be dead, and we don't want to block the source destructor).
+    // Note: This call may block while the worker tears down the Pipeline
+    // (which joins proxy threads and flushes buffers via handle_kill).
+    // We drain the response so the pipe stays in sync.
     ipc_send(pipe_, req.dump());
-    // Drain the response so the pipe stays in sync.
     ipc_recv(pipe_);
 }
 
