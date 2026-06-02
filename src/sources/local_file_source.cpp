@@ -20,9 +20,14 @@
 #pragma warning(pop)
 #endif
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <random>
+#include <set>
+#include <unordered_map>
 
 namespace fh6::sources {
 
@@ -69,8 +74,21 @@ std::vector<std::filesystem::path> parse_m3u_playlist(const std::filesystem::pat
 
 struct ProbedMetadata {
     std::uint64_t duration_ms = 0;
-    std::string title, artist, album;
+    std::string title, artist, album, album_artist;
+    int track_no = 0, disc_no = 0;
 };
+
+// Leading integer of values like "5", "5/12", "05" -> 5; 0 when absent.
+int parse_leading_int(std::string_view v) noexcept {
+    int n = 0;
+    bool any = false;
+    for (char c : v) {
+        if (c < '0' || c > '9') break;
+        any = true;
+        n   = n * 10 + (c - '0');
+    }
+    return any ? n : 0;
+}
 
 // Cover format from magic bytes; "" for anything we wouldn't give an <img>.
 std::string sniff_image_mime(const std::string& d) noexcept {
@@ -204,11 +222,36 @@ ProbedMetadata probe_metadata(const std::wstring& ff_bin, const std::filesystem:
         while (!val.empty() && val.front() == ' ') val.remove_prefix(1);
         if (val.empty()) continue;
 
-        if (out.title.empty()       && ieq_str(key, "title"))  out.title.assign(val);
-        else if (out.artist.empty() && ieq_str(key, "artist")) out.artist.assign(val);
-        else if (out.album.empty()  && ieq_str(key, "album"))  out.album.assign(val);
+        if (out.title.empty()              && ieq_str(key, "title"))        out.title.assign(val);
+        else if (out.artist.empty()        && ieq_str(key, "artist"))       out.artist.assign(val);
+        else if (out.album.empty()         && ieq_str(key, "album"))        out.album.assign(val);
+        else if (out.album_artist.empty()  && (ieq_str(key, "album_artist") ||
+                                               ieq_str(key, "ALBUM ARTIST") ||
+                                               ieq_str(key, "albumartist"))) out.album_artist.assign(val);
+        else if (out.track_no == 0         && ieq_str(key, "track"))        out.track_no = parse_leading_int(val);
+        else if (out.disc_no == 0          && (ieq_str(key, "disc") ||
+                                               ieq_str(key, "discnumber")))  out.disc_no = parse_leading_int(val);
     }
     return out;
+}
+
+// Case-insensitive, separator-aware prefix test using normalized generic
+// strings, so "C:/Music/Live" is detected as inside "C:/music".
+std::string norm_path_key(const std::filesystem::path& p) {
+    auto s = p.lexically_normal().generic_string();
+    std::ranges::transform(s, s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    if (!s.empty() && s.back() == '/') s.pop_back();
+    return s;
+}
+bool path_within(const std::string& child, const std::string& parent) noexcept {
+    if (parent.empty() || child.size() < parent.size()) return false;
+    if (child.compare(0, parent.size(), parent) != 0) return false;
+    return child.size() == parent.size() || child[parent.size()] == '/';
+}
+
+std::mt19937& thread_rng() {
+    static thread_local std::mt19937 g{std::random_device{}()};
+    return g;
 }
 
 } // namespace
@@ -242,57 +285,305 @@ struct LocalFileSource::Decoder {
     }
 };
 
-LocalFileSource::LocalFileSource(LocalFilesConfig cfg, std::filesystem::path ffmpeg_path)
+LocalFileSource::LocalFileSource(LocalFilesConfig cfg, std::filesystem::path ffmpeg_path,
+                                 std::filesystem::path index_path)
     : cfg_{std::move(cfg)},
-      ffmpeg_path_{std::move(ffmpeg_path)} {}
+      ffmpeg_path_{std::move(ffmpeg_path)},
+      index_path_{std::move(index_path)} {}
 
-LocalFileSource::~LocalFileSource() { close_current(); }
+LocalFileSource::~LocalFileSource() {
+    stop_tag_thread();
+    close_current();
+}
 
 void LocalFileSource::shutdown() noexcept { close_current(); }
 
 bool LocalFileSource::initialize() {
     if (!cfg_.enabled) return false;
-    // No directory yet is fine. auth_state stays needs_auth until the user
-    // sets one from the dashboard, which calls set_directory() to rescan.
-    if (cfg_.music_dir.empty() || !std::filesystem::exists(cfg_.music_dir)) {
-        log::warn("[local] registered with no music_dir yet -- set one from the dashboard");
-        return true;
-    }
+    // No roots yet is fine. auth_state stays needs_auth until the user adds a
+    // folder from the dashboard, which calls set_config() to rescan.
     rebuild_playlist();
-    log::info("[local] discovered {} tracks in {}", playlist_.size(), cfg_.music_dir.string());
+    log::info("[local] station '{}': {} tracks", active_station_name(), track_count());
     return true;
 }
 
+const LocalStation* LocalFileSource::active_station_locked() const noexcept {
+    if (cfg_.stations.empty()) return nullptr;
+    for (const auto& s : cfg_.stations)
+        if (s.name == cfg_.active_station) return &s;
+    return &cfg_.stations.front();
+}
+
+bool LocalFileSource::is_shuffle_locked() const noexcept {
+    const LocalStation* st = active_station_locked();
+    return st && st->order == "shuffle";
+}
+
+std::string LocalFileSource::repeat_mode_locked() const {
+    const LocalStation* st = active_station_locked();
+    return st ? st->repeat : std::string{"all"};
+}
+
+void LocalFileSource::shuffle_in_place_locked(std::vector<std::filesystem::path>& v) const {
+    std::shuffle(v.begin(), v.end(), thread_rng());
+}
+
+void LocalFileSource::order_album_by_folder_locked() {
+    std::unordered_map<std::string, std::vector<std::filesystem::path>> groups;
+    std::vector<std::string> order;
+    for (auto& p : playlist_) {
+        auto key            = p.parent_path().string();
+        auto [it, inserted] = groups.try_emplace(key);
+        if (inserted) order.push_back(key);
+        it->second.push_back(std::move(p));
+    }
+    for (auto& [_, v] : groups) std::ranges::sort(v);  // track order within the album
+    std::shuffle(order.begin(), order.end(), thread_rng());  // album order
+    playlist_.clear();
+    for (auto& key : order)
+        for (auto& p : groups[key]) playlist_.push_back(std::move(p));
+}
+
+void LocalFileSource::apply_order_locked(const LocalStation& st) {
+    if (st.order == "name") {
+        std::ranges::sort(playlist_);
+    } else if (st.order == "folder") {
+        std::ranges::sort(playlist_, [](const auto& a, const auto& b) {
+            const auto pa = a.parent_path(), pb = b.parent_path();
+            return pa != pb ? pa < pb : a.filename() < b.filename();
+        });
+    } else if (st.order == "album") {
+        order_album_by_folder_locked();  // immediate; tag re-sort refines it later
+    } else {
+        shuffle_in_place_locked(playlist_);  // "shuffle"
+    }
+}
+
 void LocalFileSource::rebuild_playlist() {
+    stop_tag_thread();   // join any in-flight tag re-sort before mutating state
     std::scoped_lock lk{mu_};
     discard_prefetch_locked();   // playlist contents/order are about to change
+    const std::uint64_t gen = ++rebuild_gen_;
     playlist_.clear();
-    std::error_code ec;
-    auto add = [&](const std::filesystem::path& p) {
+    cursor_ = 0;
+
+    const LocalStation* st = active_station_locked();
+    if (!st || st->roots.empty()) return;
+
+    std::vector<std::string> excluded;
+    excluded.reserve(st->excluded.size());
+    for (const auto& e : st->excluded) excluded.push_back(norm_path_key(e));
+    auto is_excluded = [&](const std::filesystem::path& dir) {
+        const auto key = norm_path_key(dir);
+        for (const auto& ex : excluded)
+            if (path_within(key, ex)) return true;
+        return false;
+    };
+
+    std::set<std::filesystem::path> seen;
+    auto add_file = [&](const std::filesystem::path& p) {
         const auto ext = p.extension().string();
         if (ieq_str(ext, ".m3u") || ieq_str(ext, ".m3u8")) {
             for (auto& entry : parse_m3u_playlist(p))
-                if (extension_matches(entry, cfg_.supported_formats))
+                if (extension_matches(entry, cfg_.supported_formats) && seen.insert(entry).second)
                     playlist_.push_back(std::move(entry));
-        } else if (extension_matches(p, cfg_.supported_formats)) {
+        } else if (extension_matches(p, cfg_.supported_formats) && seen.insert(p).second) {
             playlist_.push_back(p);
         }
     };
-    if (cfg_.recursive) {
-        for (const auto& e : std::filesystem::recursive_directory_iterator(
-                 cfg_.music_dir, std::filesystem::directory_options::skip_permission_denied, ec))
-            if (e.is_regular_file(ec)) add(e.path());
-    } else {
-        for (const auto& e : std::filesystem::directory_iterator(cfg_.music_dir, ec))
-            if (e.is_regular_file(ec)) add(e.path());
+
+    for (const auto& root : st->roots) {
+        std::error_code ec;
+        if (root.empty() || !std::filesystem::exists(root, ec)) continue;
+        if (st->recursive) {
+            std::filesystem::recursive_directory_iterator it(
+                root, std::filesystem::directory_options::skip_permission_denied, ec), end;
+            for (; it != end && !ec; it.increment(ec)) {
+                std::error_code fe;
+                if (it->is_directory(fe)) {
+                    if (is_excluded(it->path())) it.disable_recursion_pending();
+                } else if (it->is_regular_file(fe)) {
+                    add_file(it->path());
+                }
+            }
+        } else {
+            for (const auto& e : std::filesystem::directory_iterator(root, ec))
+                if (e.is_regular_file(ec)) add_file(e.path());
+        }
     }
-    if (cfg_.shuffle) {
-        static thread_local std::mt19937 rng{std::random_device{}()};
-        std::shuffle(playlist_.begin(), playlist_.end(), rng);
-    } else {
-        std::ranges::sort(playlist_);
+
+    apply_order_locked(*st);
+    // Populate the metadata index in the background for every station so the
+    // queue shows real titles and search matches them; reorder by tags only
+    // when the station asks for album/tag grouping.
+    start_index_locked(gen, st->order == "album" && st->grouping == "tags");
+}
+
+// ---- tag-grouping background index -----------------------------------------
+
+void LocalFileSource::stop_tag_thread() {
+    tag_cancel_.store(true, std::memory_order_release);
+    if (tag_thread_.joinable()) tag_thread_.join();
+    tag_cancel_.store(false, std::memory_order_release);
+}
+
+void LocalFileSource::start_index_locked(std::uint64_t gen, bool resort) {
+    if (playlist_.empty()) return;
+    auto paths      = playlist_;
+    std::wstring ff = ffmpeg_path_.empty() ? L"ffmpeg" : ffmpeg_path_.wstring();
+    tag_thread_     = std::thread(&LocalFileSource::index_worker, this, std::move(paths),
+                                  std::move(ff), gen, resort);
+}
+
+void LocalFileSource::load_index_if_needed() {
+    std::scoped_lock il{index_mu_};
+    if (index_loaded_) return;
+    index_loaded_ = true;
+    if (index_path_.empty()) return;
+    std::ifstream in(index_path_, std::ios::binary);
+    if (!in) return;
+    try {
+        nlohmann::json j;
+        in >> j;
+        for (auto& [k, v] : j.items()) {
+            TrackMeta m;
+            m.mtime        = v.value("mtime", std::int64_t{0});
+            m.album        = v.value("album", std::string{});
+            m.album_artist = v.value("album_artist", std::string{});
+            m.title        = v.value("title", std::string{});
+            m.artist       = v.value("artist", std::string{});
+            m.track_no     = v.value("track_no", 0);
+            m.disc_no      = v.value("disc_no", 0);
+            m.duration_ms  = v.value("duration_ms", std::uint64_t{0});
+            index_[k]      = std::move(m);
+        }
+    } catch (...) {}
+}
+
+void LocalFileSource::save_index() {
+    if (index_path_.empty()) return;
+    nlohmann::json j = nlohmann::json::object();
+    {
+        std::scoped_lock il{index_mu_};
+        for (auto& [k, m] : index_)
+            j[k] = nlohmann::json{{"mtime", m.mtime},
+                                  {"album", m.album},
+                                  {"album_artist", m.album_artist},
+                                  {"title", m.title},
+                                  {"artist", m.artist},
+                                  {"track_no", m.track_no},
+                                  {"disc_no", m.disc_no},
+                                  {"duration_ms", m.duration_ms}};
     }
-    cursor_ = 0;
+    std::error_code ec;
+    auto tmp = index_path_;
+    tmp += ".tmp";
+    {
+        std::ofstream os(tmp, std::ios::binary | std::ios::trunc);
+        if (!os) return;
+        os << j.dump();
+    }
+    std::filesystem::rename(tmp, index_path_, ec);
+}
+
+std::vector<std::filesystem::path>
+LocalFileSource::order_album_by_tags(const std::vector<std::filesystem::path>& in) {
+    struct Item {
+        std::filesystem::path path;
+        int disc = 0, track = 0;
+        std::string fname;
+    };
+    std::unordered_map<std::string, std::vector<Item>> groups;
+    std::vector<std::string> order;
+    {
+        std::scoped_lock il{index_mu_};
+        for (const auto& p : in) {
+            std::string gkey;
+            int disc_no = 0, track_no = 0;
+            auto it = index_.find(p.string());
+            if (it != index_.end() &&
+                !(it->second.album.empty() && it->second.album_artist.empty())) {
+                const auto& m = it->second;
+                gkey          = (m.album_artist.empty() ? m.artist : m.album_artist) + '\x01' + m.album;
+                disc_no       = m.disc_no;
+                track_no      = m.track_no;
+            } else {
+                gkey = std::string{'\x02'} + p.parent_path().string();  // fallback: by folder
+            }
+            auto [g, ins] = groups.try_emplace(gkey);
+            if (ins) order.push_back(gkey);
+            g->second.push_back(Item{p, disc_no, track_no, p.filename().string()});
+        }
+    }
+    for (auto& [_, v] : groups)
+        std::ranges::sort(v, [](const Item& a, const Item& b) {
+            if (a.disc != b.disc) return a.disc < b.disc;
+            if (a.track != b.track) return a.track < b.track;
+            return a.fname < b.fname;
+        });
+    std::shuffle(order.begin(), order.end(), thread_rng());
+    std::vector<std::filesystem::path> out;
+    out.reserve(in.size());
+    for (auto& k : order)
+        for (auto& item : groups[k]) out.push_back(std::move(item.path));
+    return out;
+}
+
+void LocalFileSource::index_worker(std::vector<std::filesystem::path> paths, std::wstring ff,
+                                   std::uint64_t gen, bool resort) {
+    load_index_if_needed();
+    bool probed_any = false;
+    for (const auto& p : paths) {
+        if (tag_cancel_.load(std::memory_order_acquire)) return;
+        std::error_code ec;
+        auto wt               = std::filesystem::last_write_time(p, ec);
+        const std::int64_t mt = ec ? 0 : (std::int64_t)wt.time_since_epoch().count();
+        const auto key        = p.string();
+        {
+            std::scoped_lock il{index_mu_};
+            auto it = index_.find(key);
+            if (it != index_.end() && it->second.mtime == mt) continue;
+        }
+        ProbedMetadata m = probe_metadata(ff, p);
+        TrackMeta tm;
+        tm.mtime        = mt;
+        tm.album        = std::move(m.album);
+        tm.album_artist = std::move(m.album_artist);
+        tm.title        = std::move(m.title);
+        tm.artist       = std::move(m.artist);
+        tm.track_no     = m.track_no;
+        tm.disc_no      = m.disc_no;
+        tm.duration_ms  = m.duration_ms;
+        {
+            std::scoped_lock il{index_mu_};
+            index_[key] = std::move(tm);
+        }
+        probed_any = true;
+    }
+    if (tag_cancel_.load(std::memory_order_acquire)) return;
+    if (probed_any) save_index();
+    // Let the dashboard know richer titles are available, even when we don't
+    // reorder (e.g. shuffle / name stations).
+    index_version_.fetch_add(1, std::memory_order_acq_rel);
+    if (!resort) return;
+
+    auto ordered = order_album_by_tags(paths);
+
+    std::scoped_lock lk{mu_};
+    if (tag_cancel_.load(std::memory_order_acquire) ||
+        rebuild_gen_.load(std::memory_order_acquire) != gen)
+        return;  // a newer rebuild superseded this pass
+    std::filesystem::path cur =
+        (dec_ && cursor_ < playlist_.size()) ? playlist_[cursor_] : std::filesystem::path{};
+    playlist_ = std::move(ordered);
+    discard_prefetch_locked();
+    if (!cur.empty()) {
+        auto it = std::ranges::find(playlist_, cur);
+        cursor_ = (it != playlist_.end()) ? (std::size_t)(it - playlist_.begin()) : 0;
+    } else {
+        cursor_ = 0;
+    }
+    log::info("[local] album tag index complete; re-sorted {} tracks", playlist_.size());
 }
 
 void LocalFileSource::close_current() {
@@ -396,6 +687,36 @@ std::size_t LocalFileSource::next_cursor_locked() const noexcept {
     return (cursor_ + 1) % playlist_.size();
 }
 
+// Explicit skip/next: always moves forward regardless of repeat. Reshuffles the
+// bag on wrap (shuffle order) so each pass is a fresh permutation that never
+// repeats the just-finished track first.
+bool LocalFileSource::advance_forward_locked() {
+    if (playlist_.empty()) return false;
+    const bool wrap = (cursor_ + 1 >= playlist_.size());
+    if (wrap && is_shuffle_locked() && playlist_.size() > 1) {
+        last_played_ = playlist_[cursor_];
+        shuffle_in_place_locked(playlist_);
+        if (playlist_.front() == last_played_)
+            std::swap(playlist_.front(), playlist_[playlist_.size() / 2]);
+        discard_prefetch_locked();
+        cursor_ = 0;
+        return open_track(0);
+    }
+    const std::size_t n = (cursor_ + 1) % playlist_.size();
+    if (promote_prefetch_locked(n)) return true;
+    return open_track(n);
+}
+
+// Natural end-of-track: honors repeat (one = replay, off = stop at the end,
+// all = wrap, reshuffling the bag when in shuffle order).
+bool LocalFileSource::eof_advance_locked() {
+    if (playlist_.empty()) return false;
+    const std::string rep = repeat_mode_locked();
+    if (rep == "one") return open_track(cursor_);
+    if (rep == "off" && cursor_ + 1 >= playlist_.size()) return false;
+    return advance_forward_locked();
+}
+
 bool LocalFileSource::promote_prefetch_locked(std::size_t expected_cursor) {
     if (!prefetch_dec_ || prefetch_dec_->for_cursor != expected_cursor) {
         discard_prefetch_locked();
@@ -429,9 +750,7 @@ void LocalFileSource::pause() { state_.store(PlaybackState::paused, std::memory_
 
 bool LocalFileSource::skip_next() {
     std::scoped_lock lk{mu_};
-    if (playlist_.empty()) return false;
-    const std::size_t next = next_cursor_locked();
-    if (!promote_prefetch_locked(next) && !open_track(next)) return false;
+    if (!advance_forward_locked()) return false;
     state_.store(PlaybackState::playing, std::memory_order_release);
     return true;
 }
@@ -458,10 +777,7 @@ void LocalFileSource::stop() {
 
 void LocalFileSource::next() {
     std::scoped_lock lk{mu_};
-    if (playlist_.empty()) return;
-    const std::size_t next = next_cursor_locked();
-    if (!promote_prefetch_locked(next)) open_track(next);
-    state_.store(PlaybackState::playing, std::memory_order_release);
+    if (advance_forward_locked()) state_.store(PlaybackState::playing, std::memory_order_release);
 }
 
 void LocalFileSource::previous() {
@@ -482,8 +798,7 @@ void LocalFileSource::pump(RingBuffer& ring) {
                          ? dec_->loudness_coef
                          : 1.0f;
     auto advance_at_eof = [&] {
-        const std::size_t next = next_cursor_locked();
-        if (!promote_prefetch_locked(next)) open_track(next);
+        if (!eof_advance_locked()) state_.store(PlaybackState::stopped, std::memory_order_release);
     };
 
     auto apply_dsp = [&](int16_t* samples, std::size_t frames) {
@@ -606,36 +921,73 @@ std::optional<ArtworkImage> LocalFileSource::artwork() const {
     return std::nullopt;
 }
 
-void LocalFileSource::set_directory(std::filesystem::path dir, bool recursive) {
+void LocalFileSource::set_config(LocalFilesConfig cfg) {
+    bool rescan;
     {
         std::scoped_lock lk{mu_};
-        if (cfg_.music_dir == dir && cfg_.recursive == recursive) return;
-        cfg_.music_dir = std::move(dir);
-        cfg_.recursive = recursive;
+        const LocalStation* o        = active_station_locked();
+        const LocalStation old       = o ? *o : LocalStation{};
+        const std::string old_active = cfg_.active_station;
+        const auto old_formats       = cfg_.supported_formats;
+        cfg_                         = std::move(cfg);
+        const LocalStation* n        = active_station_locked();
+        const LocalStation neu       = n ? *n : LocalStation{};
+        rescan = old_active != cfg_.active_station || old.roots != neu.roots ||
+                 old.excluded != neu.excluded || old.recursive != neu.recursive ||
+                 old.order != neu.order || old.grouping != neu.grouping ||
+                 old_formats != cfg_.supported_formats;
+    }
+    if (rescan) rebuild_playlist();
+}
+
+void LocalFileSource::set_active_station(std::string name) {
+    {
+        std::scoped_lock lk{mu_};
+        if (cfg_.active_station == name) return;
+        cfg_.active_station = std::move(name);
     }
     rebuild_playlist();
-    log::info("[local] rescanned: {} tracks under {}", playlist_.size(), cfg_.music_dir.string());
+}
+
+void LocalFileSource::reshuffle() {
+    std::scoped_lock lk{mu_};
+    if (playlist_.size() < 2) return;
+    std::filesystem::path cur =
+        (dec_ && cursor_ < playlist_.size()) ? playlist_[cursor_] : std::filesystem::path{};
+    shuffle_in_place_locked(playlist_);
+    discard_prefetch_locked();
+    if (!cur.empty()) {
+        auto it = std::ranges::find(playlist_, cur);
+        cursor_ = (it != playlist_.end()) ? (std::size_t)(it - playlist_.begin()) : 0;
+    } else {
+        cursor_ = 0;
+    }
+}
+
+bool LocalFileSource::jump_to(std::size_t index) {
+    std::scoped_lock lk{mu_};
+    if (index >= playlist_.size()) return false;
+    discard_prefetch_locked();
+    if (!open_track(index)) return false;
+    state_.store(PlaybackState::playing, std::memory_order_release);
+    return true;
 }
 
 AuthState LocalFileSource::auth_state() const noexcept {
     std::scoped_lock lk{mu_};
-    if (cfg_.music_dir.empty()) return AuthState::needs_auth;
-    if (!std::filesystem::exists(cfg_.music_dir)) return AuthState::error;
+    const LocalStation* st = active_station_locked();
+    if (!st || st->roots.empty()) return AuthState::needs_auth;
     return playlist_.empty() ? AuthState::needs_auth : AuthState::none_required;
 }
 
 std::string LocalFileSource::auth_instructions() const {
     std::scoped_lock lk{mu_};
-    if (cfg_.music_dir.empty()) {
-        return "Pick a folder containing your music in the Settings drawer "
-               "(Local files -> Music directory), then click Save.";
-    }
-    if (!std::filesystem::exists(cfg_.music_dir))
-        return "Music folder doesn't exist: " + cfg_.music_dir.string();
-    if (playlist_.empty()) {
-        return "No audio files matching the configured extensions were found in " +
-               cfg_.music_dir.string();
-    }
+    const LocalStation* st = active_station_locked();
+    if (!st || st->roots.empty())
+        return "Add a music folder to this station in the Local Files card, then Save.";
+    if (playlist_.empty())
+        return "No audio files matching the configured formats were found in this station's "
+               "folders.";
     return {};
 }
 
@@ -644,12 +996,33 @@ std::size_t LocalFileSource::track_count() const noexcept {
     return playlist_.size();
 }
 
-void LocalFileSource::set_shuffle(bool shuffle) {
-    {
-        std::scoped_lock lk{mu_};
-        cfg_.shuffle = shuffle;
-    }
-    rebuild_playlist();
+std::size_t LocalFileSource::station_count() const noexcept {
+    std::scoped_lock lk{mu_};
+    return cfg_.stations.size();
+}
+
+std::string LocalFileSource::active_station_name() const {
+    std::scoped_lock lk{mu_};
+    const LocalStation* st = active_station_locked();
+    return st ? st->name : std::string{};
+}
+
+std::string LocalFileSource::active_order() const {
+    std::scoped_lock lk{mu_};
+    const LocalStation* st = active_station_locked();
+    return st ? st->order : std::string{};
+}
+
+std::string LocalFileSource::active_grouping() const {
+    std::scoped_lock lk{mu_};
+    const LocalStation* st = active_station_locked();
+    return st ? st->grouping : std::string{};
+}
+
+std::string LocalFileSource::active_repeat() const {
+    std::scoped_lock lk{mu_};
+    const LocalStation* st = active_station_locked();
+    return st ? st->repeat : std::string{};
 }
 
 void LocalFileSource::set_ffmpeg_path(std::filesystem::path p) {
@@ -668,11 +1041,62 @@ void LocalFileSource::set_playback_options(const PlaybackConfig& opts) {
     }
 }
 
-std::vector<std::string> LocalFileSource::playlist_snapshot() const {
+LocalFileSource::QueueSnapshot LocalFileSource::queue_snapshot() const {
     std::scoped_lock lk{mu_};
-    std::vector<std::string> out;
-    out.reserve(playlist_.size());
-    for (const auto& p : playlist_) out.push_back(p.string());
+    std::scoped_lock il{index_mu_};
+    QueueSnapshot snap;
+    snap.cursor = cursor_;
+    snap.entries.reserve(playlist_.size());
+    for (std::size_t i = 0; i < playlist_.size(); ++i) {
+        const auto& p = playlist_[i];
+        QueueEntry e{i, p.stem().string(), {}, p.parent_path().filename().string()};
+        if (auto it = index_.find(p.string()); it != index_.end()) {
+            if (!it->second.title.empty()) e.title = it->second.title;
+            e.artist = it->second.artist;
+        }
+        snap.entries.push_back(std::move(e));
+    }
+    return snap;
+}
+
+std::vector<FsEntry> enumerate_dir(const std::filesystem::path& dir) {
+    auto u8 = [](const std::filesystem::path& p) {
+        auto s = p.u8string();
+        return std::string{s.begin(), s.end()};
+    };
+    std::vector<FsEntry> out;
+    if (dir.empty()) {
+        const DWORD mask = GetLogicalDrives();
+        for (int i = 0; i < 26; ++i) {
+            if (!(mask & (1u << i))) continue;
+            std::string root = std::string(1, char('A' + i)) + ":\\";
+            out.push_back(FsEntry{root, root, true});
+        }
+        return out;
+    }
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(
+             dir, std::filesystem::directory_options::skip_permission_denied, ec)) {
+        std::error_code de;
+        if (!e.is_directory(de)) continue;
+        FsEntry fe;
+        fe.name = u8(e.path().filename());
+        fe.path = u8(e.path());
+        // Cheap "has children": stop at the first subdirectory found.
+        std::error_code ce;
+        std::filesystem::directory_iterator sub(
+            e.path(), std::filesystem::directory_options::skip_permission_denied, ce),
+            subEnd;
+        for (; sub != subEnd && !ce; sub.increment(ce)) {
+            std::error_code se;
+            if (sub->is_directory(se)) {
+                fe.has_children = true;
+                break;
+            }
+        }
+        out.push_back(std::move(fe));
+    }
+    std::ranges::sort(out, [](const FsEntry& a, const FsEntry& b) { return a.name < b.name; });
     return out;
 }
 

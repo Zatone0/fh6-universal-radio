@@ -26,9 +26,8 @@ export const SCHEMA = [
     "Local files",
     [
       ["enabled", "Enabled", "checkbox"],
-      ["music_dir", "Music directory", "text"],
-      ["recursive", "Scan subfolders", "checkbox"],
-      ["shuffle", "Shuffle", "checkbox"],
+      // Folders, stations, ordering and the queue live in the dedicated
+      // Local Files card on the dashboard (render/localFiles.js).
     ],
   ],
   [

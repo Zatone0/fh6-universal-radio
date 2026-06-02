@@ -96,11 +96,42 @@ json source_to_json(IAudioSource* s) {
          }},
         {"details", json::object()},
     };
-    if (auto* lf = dynamic_cast<sources::LocalFileSource*>(s))
-        j["details"]["track_count"] = lf->track_count();
+    if (auto* lf = dynamic_cast<sources::LocalFileSource*>(s)) {
+        j["details"]["track_count"]    = lf->track_count();
+        j["details"]["station_count"]  = lf->station_count();
+        j["details"]["active_station"] = lf->active_station_name();
+        j["details"]["order"]          = lf->active_order();
+        j["details"]["grouping"]       = lf->active_grouping();
+        j["details"]["repeat"]         = lf->active_repeat();
+        j["details"]["index_version"]  = lf->index_version();
+    }
     if (auto* yt = dynamic_cast<sources::YouTubeMusicSource*>(s))
         j["details"]["shuffle"] = yt->shuffle();
     return j;
+}
+
+json paths_to_json(const std::vector<std::filesystem::path>& v) {
+    json a = json::array();
+    for (const auto& p : v) a.push_back(path_s(p));
+    return a;
+}
+
+json station_to_json(const LocalStation& s) {
+    return json{
+        {"name", s.name},
+        {"roots", paths_to_json(s.roots)},
+        {"excluded", paths_to_json(s.excluded)},
+        {"recursive", s.recursive},
+        {"order", s.order},
+        {"grouping", s.grouping},
+        {"repeat", s.repeat},
+    };
+}
+
+json stations_to_json(const std::vector<LocalStation>& v) {
+    json a = json::array();
+    for (const auto& s : v) a.push_back(station_to_json(s));
+    return a;
 }
 
 json config_to_json(const Config& c) {
@@ -116,9 +147,8 @@ json config_to_json(const Config& c) {
         {"local_files",
          json{
              {"enabled", c.local_files.enabled},
-             {"music_dir", path_s(c.local_files.music_dir)},
-             {"recursive", c.local_files.recursive},
-             {"shuffle", c.local_files.shuffle},
+             {"active_station", c.local_files.active_station},
+             {"stations", stations_to_json(c.local_files.stations)},
              {"supported_formats", c.local_files.supported_formats},
          }},
         {"youtube_music",
@@ -180,6 +210,29 @@ std::filesystem::path pull_path(const json& tbl, const char* k,
     return s.empty() ? std::filesystem::path{} : std::filesystem::path{s};
 }
 
+std::vector<std::filesystem::path> paths_from_json(const json& a) {
+    std::vector<std::filesystem::path> out;
+    if (a.is_array())
+        for (const auto& e : a)
+            if (e.is_string()) {
+                auto s = e.get<std::string>();
+                if (!s.empty()) out.emplace_back(s);
+            }
+    return out;
+}
+
+LocalStation station_from_json(const json& j) {
+    LocalStation s;
+    s.name      = pull<std::string>(j, "name", "");
+    s.recursive = pull<bool>(j, "recursive", true);
+    s.order     = pull<std::string>(j, "order", s.order);
+    s.grouping  = pull<std::string>(j, "grouping", s.grouping);
+    s.repeat    = pull<std::string>(j, "repeat", s.repeat);
+    if (auto it = j.find("roots"); it != j.end())    s.roots    = paths_from_json(*it);
+    if (auto it = j.find("excluded"); it != j.end()) s.excluded = paths_from_json(*it);
+    return s;
+}
+
 // Deep-merge a partial JSON patch into Config. Absent keys keep their value.
 void apply_patch(Config& c, const json& j) {
     if (auto it = j.find("general"); it != j.end()) {
@@ -190,10 +243,14 @@ void apply_patch(Config& c, const json& j) {
         c.general.ffmpeg_path     = pull_path(*it, "ffmpeg_path", c.general.ffmpeg_path);
     }
     if (auto it = j.find("local_files"); it != j.end()) {
-        c.local_files.enabled   = pull(*it, "enabled", c.local_files.enabled);
-        c.local_files.music_dir = pull_path(*it, "music_dir", c.local_files.music_dir);
-        c.local_files.recursive = pull(*it, "recursive", c.local_files.recursive);
-        c.local_files.shuffle   = pull(*it, "shuffle", c.local_files.shuffle);
+        c.local_files.enabled = pull(*it, "enabled", c.local_files.enabled);
+        c.local_files.active_station =
+            pull(*it, "active_station", c.local_files.active_station);
+        if (auto sts = it->find("stations"); sts != it->end() && sts->is_array()) {
+            std::vector<LocalStation> parsed;
+            for (const auto& st : *sts) parsed.push_back(station_from_json(st));
+            if (!parsed.empty()) c.local_files.stations = std::move(parsed);
+        }
         if (auto fmts = it->find("supported_formats"); fmts != it->end() && fmts->is_array())
             c.local_files.supported_formats = fmts->get<std::vector<std::string>>();
     }
@@ -541,10 +598,80 @@ struct HttpServer::Impl {
             deps.retry();
             return ok();
         }
-        if (m == "GET" && p == "/api/source/local_files/playlist") {
+        if (m == "GET" && p == "/api/source/local_files/queue") {
             auto* lf = find_typed<sources::LocalFileSource>("local_files");
-            return lf ? ok(json{{"tracks", lf->playlist_snapshot()}})
-                      : fail(404, "local_files not registered");
+            if (!lf) return fail(404, "local_files not registered");
+            auto snap   = lf->queue_snapshot();
+            json tracks = json::array();
+            for (const auto& e : snap.entries)
+                tracks.push_back(
+                    json{{"index", e.index}, {"title", e.title}, {"folder", e.folder}});
+            return ok(json{{"cursor", snap.cursor}, {"tracks", tracks}});
+        }
+        if (m == "POST" && p == "/api/fs/browse") {
+            auto j = req.body.empty() ? json::object() : json::parse(req.body);
+            std::filesystem::path dir = j.value("path", std::string{});
+            json entries              = json::array();
+            for (const auto& e : sources::enumerate_dir(dir))
+                entries.push_back(
+                    json{{"name", e.name}, {"path", e.path}, {"has_children", e.has_children}});
+            std::string parent;
+            if (!dir.empty()) {
+                auto pp = dir.parent_path();
+                if (pp != dir) parent = path_s(pp);  // at a drive root, fall back to the drive list
+            }
+            return ok(json{{"parent", parent}, {"path", path_s(dir)}, {"entries", entries}});
+        }
+        if (m == "GET" && p == "/api/source/local_files/stations") {
+            auto* lf  = find_typed<sources::LocalFileSource>("local_files");
+            auto snap = store.snapshot();
+            return ok(json{
+                {"stations", stations_to_json(snap.local_files.stations)},
+                {"active_station", snap.local_files.active_station},
+                {"track_count", lf ? lf->track_count() : 0},
+            });
+        }
+        if (m == "PUT" && p == "/api/source/local_files/stations") {
+            auto j = json::parse(req.body);
+            store.patch([&](Config& c) {
+                if (auto sts = j.find("stations"); sts != j.end() && sts->is_array()) {
+                    std::vector<LocalStation> parsed;
+                    for (const auto& st : *sts) parsed.push_back(station_from_json(st));
+                    if (!parsed.empty()) c.local_files.stations = std::move(parsed);
+                }
+                if (auto a = j.find("active_station"); a != j.end() && a->is_string())
+                    c.local_files.active_station = a->get<std::string>();
+            });
+            auto* lf = find_typed<sources::LocalFileSource>("local_files");
+            return ok(json{{"track_count", lf ? lf->track_count() : 0}});
+        }
+        if (m == "POST" && p == "/api/source/local_files/activate") {
+            auto* lf = find_typed<sources::LocalFileSource>("local_files");
+            if (!lf) return fail(404, "local_files not registered");
+            auto name             = json::parse(req.body).value("name", std::string{});
+            const bool was_active = (mgr.active() == lf);
+            // patch -> apply_config -> set_config rebuilds for the new station.
+            store.patch([&](Config& c) { c.local_files.active_station = name; });
+            if (was_active) mgr.ring().drain();
+            lf->play();
+            mgr.switch_to("local_files");
+            return ok(json{{"track_count", lf->track_count()}});
+        }
+        if (m == "POST" && p == "/api/source/local_files/play") {
+            auto* lf = find_typed<sources::LocalFileSource>("local_files");
+            if (!lf) return fail(404, "local_files not registered");
+            auto idx              = json::parse(req.body).value("index", std::size_t{0});
+            const bool was_active = (mgr.active() == lf);
+            if (!lf->jump_to(idx)) return fail(400, "index out of range");
+            if (was_active) mgr.ring().drain();
+            mgr.switch_to("local_files");
+            return ok();
+        }
+        if (m == "POST" && p == "/api/source/local_files/reshuffle") {
+            auto* lf = find_typed<sources::LocalFileSource>("local_files");
+            if (!lf) return fail(404, "local_files not registered");
+            lf->reshuffle();
+            return ok();
         }
 
         if (m == "PUT" && p == "/api/config") {
@@ -643,20 +770,9 @@ struct HttpServer::Impl {
         if (m == "POST" && p == "/api/source/local_files/rescan") {
             auto* lf = find_typed<sources::LocalFileSource>("local_files");
             if (!lf) return fail(404, "local_files not registered");
-            auto j = req.body.empty() ? json::object() : json::parse(req.body);
-            if (auto it = j.find("music_dir"); it != j.end()) {
-                std::filesystem::path dir = it->get<std::string>();
-                bool recursive            = j.value("recursive", true);
-                lf->set_directory(dir, recursive);
-                store.patch([&](Config& c) {
-                    c.local_files.music_dir = dir;
-                    c.local_files.recursive = recursive;
-                });
-            } else {
-                auto snap = store.snapshot();
-                lf->set_directory(snap.local_files.music_dir, snap.local_files.recursive);
-            }
-            return ok(json{{"track_count", lf->playlist_snapshot().size()}});
+            // Re-apply the stored config; set_config rescans the active station.
+            lf->set_config(store.snapshot().local_files);
+            return ok(json{{"track_count", lf->track_count()}});
         }
         if (m == "POST" && p == "/api/options") {
             auto j = json::parse(req.body);

@@ -128,8 +128,8 @@ void run_bridge(HMODULE self) noexcept {
     // the dashboard tile live, without a game restart.
     auto sync_sources = [&mgr, &data_dir](const Config& c) {
         if (c.local_files.enabled && !mgr.find("local_files")) {
-            auto src = std::make_unique<sources::LocalFileSource>(c.local_files,
-                                                                  c.general.ffmpeg_path);
+            auto src = std::make_unique<sources::LocalFileSource>(
+                c.local_files, c.general.ffmpeg_path, data_dir / "local_index.json");
             if (src->initialize()) mgr.register_source(std::move(src));
         } else if (!c.local_files.enabled && mgr.find("local_files")) {
             mgr.unregister_source("local_files");
@@ -209,9 +209,8 @@ void run_bridge(HMODULE self) noexcept {
         bridge.set_force_stereo_audio(c.playback.force_stereo_audio);
         if (ctrl_ptr) ctrl_ptr->set_configured_gain(c.audio.output_gain);
         if (auto* local = dynamic_cast<sources::LocalFileSource*>(mgr.find("local_files"))) {
-            local->set_shuffle(c.local_files.shuffle);
             local->set_ffmpeg_path(c.general.ffmpeg_path);
-            local->set_directory(c.local_files.music_dir, c.local_files.recursive);
+            local->set_config(c.local_files);
             if (mgr.active() == local && local->track_count() > 0 &&
                 local->playback_state() != PlaybackState::playing) {
                 local->play();
