@@ -18,8 +18,8 @@ inline constexpr std::size_t kToolCount = 3;
 
 struct DependencyStatus {
     std::string name;
-    bool managed_present = false;
-    bool downloading    = false;
+    bool managed_present           = false;
+    bool downloading               = false;
     std::uint64_t downloaded_bytes = 0;
     std::uint64_t total_bytes      = 0;
     std::string error;

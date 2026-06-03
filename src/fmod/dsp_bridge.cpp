@@ -34,8 +34,8 @@ constexpr FMODSig kAnchored[] = {
 // untouched and only over-driven peaks get rounded off.
 inline float soft_clip(float x) noexcept {
     constexpr float k = 0.85f;
-    const float a    = std::fabs(x);
-    const float over = std::max(0.0f, a - k) / (1.0f - k);
+    const float a     = std::fabs(x);
+    const float over  = std::max(0.0f, a - k) / (1.0f - k);
     return std::copysign(std::min(a, k) + (1.0f - k) * over / (1.0f + over), x);
 }
 
@@ -165,8 +165,7 @@ bool DSPBridge::validate_handle(uint32_t handle) const noexcept {
 void DSPBridge::release_current_dsp_locked() noexcept {
     if (!current_dsp_) return;
     const uint32_t handle = current_handle_.load(std::memory_order_relaxed);
-    if (handle)
-        seh_call([&] { fns_.channel_control_rem_dsp(handle, current_dsp_); });
+    if (handle) seh_call([&] { fns_.channel_control_rem_dsp(handle, current_dsp_); });
     seh_call([&] { fns_.dsp_release(current_dsp_); });
     current_dsp_ = nullptr;
     current_handle_.store(0, std::memory_order_release);
@@ -181,8 +180,7 @@ void DSPBridge::install_dsp_locked(uint32_t handle) noexcept {
     if (!fns_.system_create_dsp && fns_.host_base) {
         fns_.system_create_dsp = resolve_create_dsp(parse(fns_.host_base));
         if (fns_.system_create_dsp) {
-            log::info("[dsp] resolved System::createDSP late at {}",
-                      (void*)fns_.system_create_dsp);
+            log::info("[dsp] resolved System::createDSP late at {}", (void*)fns_.system_create_dsp);
         } else {
             log::warn("[dsp] System::createDSP still unresolved -- install aborted");
             return;
@@ -251,8 +249,7 @@ void DSPBridge::retarget_if_needed() noexcept {
     // No live handle on the RadioStreamFmod. If we still think we're installed
     // on a dead one, release it so we stop querying the stale handle.
     if (!handle) {
-        if (current_handle_.load(std::memory_order_relaxed))
-            release_current_dsp_locked();
+        if (current_handle_.load(std::memory_order_relaxed)) release_current_dsp_locked();
         return;
     }
 
@@ -292,8 +289,11 @@ uint32_t __stdcall DSPBridge::read_callback(void* /*dsp_state*/, float* in_buf, 
         return 0;
     }
     if (m == DSPMode::passthrough) {
-        if (in_buf) std::memcpy(out_buf, in_buf, total * sizeof(float));
-        else        std::memset(out_buf, 0, total * sizeof(float));
+        if (in_buf) {
+            std::memcpy(out_buf, in_buf, total * sizeof(float));
+        } else {
+            std::memset(out_buf, 0, total * sizeof(float));
+        }
         stats();
         return 0;
     }
@@ -323,7 +323,7 @@ uint32_t __stdcall DSPBridge::read_callback(void* /*dsp_state*/, float* in_buf, 
     for (uint32_t produced = 0; produced < length;) {
         const uint32_t want_frames = std::min(length - produced, kChunkFrames);
         const std::size_t got      = ring.read(scratch, want_frames * 4);
-        const uint32_t got_frames  = static_cast<uint32_t>(got / 4);
+        const auto got_frames      = static_cast<uint32_t>(got / 4);
 
         for (uint32_t f = 0; f < got_frames; ++f) {
             const float fl = scratch[f * 2 + 0] * scale;

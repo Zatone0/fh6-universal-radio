@@ -10,6 +10,7 @@ import { createOutput } from "./render/output.js";
 import { renderSettings, collectSettings } from "./render/settings.js";
 import { createDeps } from "./render/deps.js";
 import { createExternalAudio } from "./render/externalAudio.js";
+import { createLocalFiles } from "./render/localFiles.js";
 
 let state = null;
 let cfg = null;
@@ -71,6 +72,16 @@ const externalAudio = createExternalAudio(mainEl, {
   },
 });
 
+const localFiles = createLocalFiles(mainEl, {
+  getState: () => state,
+  getConfig: () => cfg,
+  onSaved: async () => {
+    cfg = await api.getConfig().catch(() => cfg);
+    state = await api.getState().catch(() => state);
+    render();
+  },
+});
+
 async function switchSource(name) {
   try {
     await api.switchSource(name);
@@ -122,13 +133,16 @@ function render() {
   renderSources(refs.sources, state, cfg, switchSource);
   renderOutput(state);
   externalAudio.render();
+  localFiles.render();
 
   refs.sourceCard.hidden = false;
   refs.outputCard.hidden = !state.sources?.active;
 
   const available = state.sources?.available || [];
-  refs.ytCard.hidden = !available.some(s => s.name === "youtube_music");
-  refs.jfCard.hidden = !available.some(s => s.name === "jellyfin");
+  const active = state.sources?.active;
+  // Source-specific cards only show while that source is on air.
+  refs.ytCard.hidden = active !== "youtube_music";
+  refs.jfCard.hidden = active !== "jellyfin";
   const shuffleOn = !!available.find(s => s.name === "youtube_music")?.details?.shuffle;
   refs.ytShuffle.classList.toggle("toggled", shuffleOn);
   refs.ytShuffle.setAttribute("aria-pressed", String(shuffleOn));
@@ -262,6 +276,7 @@ $("#save-config").addEventListener("click", async () => {
   try {
     cfg = await api.putConfig(collectSettings(refs.form));
     externalAudio.invalidate();
+    localFiles.invalidate();
     state = await api.getState().catch(() => state);
     render();
     toast("Saved");
@@ -275,6 +290,7 @@ $("#reload-config").addEventListener("click", async () => {
   try {
     cfg = await api.reloadConfig();
     externalAudio.invalidate();
+    localFiles.invalidate();
     renderSettings(refs.form, cfg);
     render();
     toast("Reloaded from disk");

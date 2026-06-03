@@ -74,6 +74,46 @@ describe("api endpoints", () => {
     });
   });
 
+  it("local files endpoints carry the right method and body", async () => {
+    await api.browseFs("C:\\Music");
+    expect(lastCall()).toMatchObject({
+      path: "/api/fs/browse",
+      method: "POST",
+      body: { path: "C:\\Music" },
+    });
+
+    await api.getLocalStations();
+    expect(lastCall()).toMatchObject({ path: "/api/source/local_files/stations", method: "GET" });
+
+    const stations = [{ name: "Rock", roots: ["D:\\Rock"], excluded: [] }];
+    await api.putLocalStations(stations, "Rock");
+    expect(lastCall()).toMatchObject({
+      path: "/api/source/local_files/stations",
+      method: "PUT",
+      body: { stations, active_station: "Rock" },
+    });
+
+    await api.activateLocalStation("Rock");
+    expect(lastCall()).toMatchObject({
+      path: "/api/source/local_files/activate",
+      method: "POST",
+      body: { name: "Rock" },
+    });
+
+    await api.getLocalQueue();
+    expect(lastCall()).toMatchObject({ path: "/api/source/local_files/queue", method: "GET" });
+
+    await api.playLocalIndex(7);
+    expect(lastCall()).toMatchObject({
+      path: "/api/source/local_files/play",
+      method: "POST",
+      body: { index: 7 },
+    });
+
+    await api.reshuffleLocal();
+    expect(lastCall()).toMatchObject({ path: "/api/source/local_files/reshuffle", method: "POST" });
+  });
+
   it("throws the server error message on non-ok responses", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,

@@ -25,7 +25,7 @@ struct RoApartment {
 
     RoApartment() noexcept {
         const HRESULT hr = RoInitialize(RO_INIT_MULTITHREADED);
-        uninit = SUCCEEDED(hr);
+        uninit           = SUCCEEDED(hr);
     }
 
     ~RoApartment() {
@@ -33,9 +33,7 @@ struct RoApartment {
     }
 };
 
-std::string s(winrt::hstring const& value) {
-    return winrt::to_string(value);
-}
+std::string s(winrt::hstring const& value) { return winrt::to_string(value); }
 
 uint64_t ms_from_timespan(winrt::Windows::Foundation::TimeSpan const& ts) noexcept {
     using namespace std::chrono;
@@ -90,16 +88,16 @@ TrackInfo track_from_session(media::GlobalSystemMediaTransportControlsSession co
     TrackInfo info;
     const auto props = session.TryGetMediaPropertiesAsync().get();
 
-    info.title = s(props.Title());
+    info.title  = s(props.Title());
     info.artist = s(props.Artist());
     if (info.artist.empty()) info.artist = s(props.AlbumArtist());
     info.album = s(props.AlbumTitle());
 
     try {
         const auto timeline = session.GetTimelineProperties();
-        info.position_ms = ms_from_timespan(timeline.Position());
-        const auto start = ms_from_timespan(timeline.StartTime());
-        const auto end = ms_from_timespan(timeline.EndTime());
+        info.position_ms    = ms_from_timespan(timeline.Position());
+        const auto start    = ms_from_timespan(timeline.StartTime());
+        const auto end      = ms_from_timespan(timeline.EndTime());
         if (end > start) info.duration_ms = end - start;
     } catch (...) {
         info.position_ms = fallback_position_ms;
@@ -112,8 +110,7 @@ TrackInfo track_from_session(media::GlobalSystemMediaTransportControlsSession co
 
 // Run a transport command against the selected (or current) session. Returns
 // false when nothing matches or the call throws.
-template <class Fn>
-bool with_session(std::string_view selected_id, Fn&& fn) {
+template <class Fn> bool with_session(std::string_view selected_id, Fn&& fn) {
     try {
         RoApartment apartment;
         auto manager = session_manager();
@@ -142,18 +139,18 @@ enumerate_external_audio_media_sessions(std::string_view selected_id) {
 #if FH6_EXTERNAL_AUDIO_HAS_CPPWINRT
     try {
         RoApartment apartment;
-        auto manager = session_manager();
-        const auto current = manager.GetCurrentSession();
+        auto manager          = session_manager();
+        const auto current    = manager.GetCurrentSession();
         const auto current_id = current ? s(current.SourceAppUserModelId()) : std::string{};
-        const auto sessions = manager.GetSessions();
+        const auto sessions   = manager.GetSessions();
 
         out.reserve(sessions.Size());
         for (uint32_t i = 0; i < sessions.Size(); ++i) {
             auto session = sessions.GetAt(i);
             ExternalAudioMediaSession item;
-            item.id = s(session.SourceAppUserModelId());
-            item.name = display_name(item.id);
-            item.is_current = !current_id.empty() && item.id == current_id;
+            item.id          = s(session.SourceAppUserModelId());
+            item.name        = display_name(item.id);
+            item.is_current  = !current_id.empty() && item.id == current_id;
             item.is_selected = !selected_id.empty() && item.id == selected_id;
 
             if (!item.id.empty()) out.push_back(std::move(item));
@@ -200,11 +197,11 @@ std::optional<ArtworkImage> external_audio_media_session_thumbnail(std::string_v
         if (!session) return std::nullopt;
 
         const auto props = session->TryGetMediaPropertiesAsync().get();
-        const auto ref = props.Thumbnail();
+        const auto ref   = props.Thumbnail();
         if (!ref) return std::nullopt;
 
         const streams::IRandomAccessStreamWithContentType stream = ref.OpenReadAsync().get();
-        const uint64_t size = stream ? stream.Size() : 0;
+        const uint64_t size                                      = stream ? stream.Size() : 0;
         if (size == 0 || size > (8ull << 20)) return std::nullopt;
 
         streams::DataReader reader{stream};
@@ -212,9 +209,9 @@ std::optional<ArtworkImage> external_audio_media_session_thumbnail(std::string_v
 
         ArtworkImage out;
         out.bytes.resize(static_cast<std::size_t>(size));
-        reader.ReadBytes(winrt::array_view<uint8_t>(
-            reinterpret_cast<uint8_t*>(out.bytes.data()),
-            reinterpret_cast<uint8_t*>(out.bytes.data()) + out.bytes.size()));
+        reader.ReadBytes(winrt::array_view<uint8_t>(reinterpret_cast<uint8_t*>(out.bytes.data()),
+                                                    reinterpret_cast<uint8_t*>(out.bytes.data()) +
+                                                        out.bytes.size()));
         out.mime = s(stream.ContentType());
         if (out.mime.empty()) out.mime = "image/jpeg";
         return out;

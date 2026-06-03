@@ -12,7 +12,7 @@ namespace fh6::sources {
 struct ExternalAudioMediaSession {
     std::string id;
     std::string name;
-    bool is_current = false;
+    bool is_current  = false;
     bool is_selected = false;
 };
 

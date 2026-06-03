@@ -15,7 +15,9 @@ namespace {
 constexpr int kHttpTimeoutMs = 5000;
 
 struct WinHttpDeleter {
-    void operator()(void* h) const noexcept { if (h) WinHttpCloseHandle(h); }
+    void operator()(void* h) const noexcept {
+        if (h) WinHttpCloseHandle(h);
+    }
 };
 using WinHttpHandle = std::unique_ptr<void, WinHttpDeleter>;
 
@@ -35,24 +37,22 @@ std::optional<std::string> http_get(std::string_view url, std::string_view extra
     }
     const std::wstring host(comp.lpszHostName, comp.dwHostNameLength);
     // path and the ?query that follows it are contiguous in wurl.
-    std::wstring path(comp.lpszUrlPath,
-                      comp.dwUrlPathLength + comp.dwExtraInfoLength);
+    std::wstring path(comp.lpszUrlPath, comp.dwUrlPathLength + comp.dwExtraInfoLength);
     if (path.empty()) path = L"/";
 
     WinHttpHandle session{WinHttpOpen(L"FH6 Universal Radio/1.0",
-                                      WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-                                      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
+                                      WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+                                      WINHTTP_NO_PROXY_BYPASS, 0)};
     if (!session) return std::nullopt;
-    WinHttpSetTimeouts(session.get(), kHttpTimeoutMs, kHttpTimeoutMs,
-                       kHttpTimeoutMs, kHttpTimeoutMs);
+    WinHttpSetTimeouts(session.get(), kHttpTimeoutMs, kHttpTimeoutMs, kHttpTimeoutMs,
+                       kHttpTimeoutMs);
 
     WinHttpHandle conn{WinHttpConnect(session.get(), host.c_str(), comp.nPort, 0)};
     if (!conn) return std::nullopt;
 
-    WinHttpHandle req{WinHttpOpenRequest(conn.get(), L"GET", path.c_str(), nullptr,
-                                         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                         comp.nScheme == INTERNET_SCHEME_HTTPS
-                                             ? WINHTTP_FLAG_SECURE : 0)};
+    WinHttpHandle req{WinHttpOpenRequest(
+        conn.get(), L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+        comp.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0)};
     if (!req) return std::nullopt;
 
     if (!extra_header.empty()) {
@@ -60,8 +60,8 @@ std::optional<std::string> http_get(std::string_view url, std::string_view extra
         WinHttpAddRequestHeaders(req.get(), h.c_str(), (ULONG)-1L, WINHTTP_ADDREQ_FLAG_ADD);
     }
 
-    if (!WinHttpSendRequest(req.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+    if (!WinHttpSendRequest(req.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0,
+                            0, 0) ||
         !WinHttpReceiveResponse(req.get(), nullptr)) {
         log::error("[http] GET {} send/receive failed (err {})", url, GetLastError());
         return std::nullopt;

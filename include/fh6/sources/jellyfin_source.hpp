@@ -4,6 +4,7 @@
 #include "fh6/config.hpp"
 #include "fh6/playback_dsp.hpp"
 #include "fh6/ring_buffer.hpp"
+#include "fh6/worker/worker_client.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -20,7 +21,7 @@ struct JellyfinTrack {
     std::string title;
     std::string artist;
     std::string album;
-    std::string image_tag;   // ImageTags.Primary; empty when the item has no cover
+    std::string image_tag; // ImageTags.Primary; empty when the item has no cover
     std::uint64_t duration_ms = 0;
 };
 
@@ -30,10 +31,11 @@ struct JellyfinTrack {
 // freeze the AudioSourceManager pump loop.
 class JellyfinSource final : public IAudioSource {
 public:
-    JellyfinSource(JellyfinConfig cfg, std::filesystem::path ffmpeg_path);
+    JellyfinSource(JellyfinConfig cfg, std::filesystem::path ffmpeg_path,
+                   worker::WorkerClient* worker = nullptr);
     ~JellyfinSource() override;
 
-    std::string_view name() const noexcept override         { return "jellyfin"; }
+    std::string_view name() const noexcept override { return "jellyfin"; }
     std::string_view display_name() const noexcept override { return "Jellyfin"; }
 
     bool initialize() override;
@@ -68,7 +70,7 @@ private:
     struct Pipe;
 
     // mu_ held.
-    bool refresh_queue_locked();   // releases mu_ across the HTTP fetch, re-acquires to swap
+    bool refresh_queue_locked(); // releases mu_ across the HTTP fetch, re-acquires to swap
     std::unique_ptr<Pipe> spawn_pipe_locked(std::size_t for_idx);
     void start_pipe_locked();
     void stop_pipe_locked();
@@ -80,6 +82,7 @@ private:
 
     JellyfinConfig cfg_;
     std::filesystem::path ffmpeg_path_;
+    worker::WorkerClient* worker_;
 
     mutable std::mutex mu_;
     std::vector<JellyfinTrack> queue_;

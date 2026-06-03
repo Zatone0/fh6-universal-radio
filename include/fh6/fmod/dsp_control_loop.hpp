@@ -15,7 +15,9 @@
 #include <stop_token>
 #include <thread>
 
-namespace fh6 { class IAudioSource; }
+namespace fh6 {
+class IAudioSource;
+} // namespace fh6
 
 namespace fh6::fmod_bridge {
 
@@ -58,13 +60,13 @@ private:
     std::atomic<float> configured_gain_;
     MetadataInjector meta_;
     GameStateProbe game_state_;
-    std::uint64_t prev_calls_ = 0;
-    int stale_ticks_          = 0;
-    int idle_ticks_           = 0;        // ticks with no read_callback progress
-    bool radio_audible_       = true;     // last audibility reported to the source
-    bool audible_primed_      = false;    // active source has been read at least once
-    IAudioSource* audible_source_ = nullptr;  // source the two above track
-    time_point last_retune_{};  // last off/on station toggle, for cooldown
+    std::uint64_t prev_calls_     = 0;
+    int stale_ticks_              = 0;
+    int idle_ticks_               = 0;       // ticks with no read_callback progress
+    bool radio_audible_           = true;    // last audibility reported to the source
+    bool audible_primed_          = false;   // active source has been read at least once
+    IAudioSource* audible_source_ = nullptr; // source the two above track
+    time_point last_retune_{};               // last off/on station toggle, for cooldown
 
     // std::atomic<std::shared_ptr<T>> would be ideal here but libc++ in
     // llvm-mingw doesn't ship the C++20 specialization; a plain mutex works

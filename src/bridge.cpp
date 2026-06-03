@@ -15,10 +15,12 @@
 #include "fh6/sources/youtube_music_source.hpp"
 #include "fh6/sources/jellyfin_source.hpp"
 #include "fh6/sources/spotify_source.hpp"
+#include "fh6/worker/worker_client.hpp"
 #include "fh6/sources/online_radio_source.hpp"
 
 #include <windows.h>
 #include <array>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -37,9 +39,22 @@ std::filesystem::path module_directory(HMODULE self) {
     return std::filesystem::path{buf}.parent_path();
 }
 
+bool host_is_game(const std::filesystem::path& dll_dir) {
+    wchar_t buf[MAX_PATH];
+    DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return false;
+    const std::filesystem::path exe{std::wstring_view{buf, n}};
+
+    std::error_code ec;
+    if (!std::filesystem::equivalent(exe.parent_path(), dll_dir, ec)) return false;
+
+    std::wstring name = exe.filename().wstring();
+    for (wchar_t& c : name) c = static_cast<wchar_t>(std::towlower(c));
+    return name != L"gamelaunchhelper.exe";
+}
+
 SpotifyConfig anchor_spotify(SpotifyConfig sp, const std::filesystem::path& data_dir) {
-    if (!sp.cache_dir.empty() && sp.cache_dir.is_relative())
-        sp.cache_dir = data_dir / sp.cache_dir;
+    if (!sp.cache_dir.empty() && sp.cache_dir.is_relative()) sp.cache_dir = data_dir / sp.cache_dir;
     return sp;
 }
 
@@ -92,7 +107,15 @@ bool verify_ui_credits(const std::filesystem::path& ui_dir) {
 } // namespace
 
 void run_bridge(HMODULE self) noexcept {
-    const auto dir      = module_directory(self);
+    const auto dir = module_directory(self);
+    if (!host_is_game(dir)) return; // never spawn a bridge outside the game itself
+
+    if (HANDLE guard = CreateMutexW(nullptr, TRUE, L"Local\\fh6-universal-radio-bridge");
+        guard && GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(guard);
+        return;
+    }
+
     const auto data_dir = dir / "fh6-radio";
     std::error_code ec;
     std::filesystem::create_directories(data_dir, ec);
@@ -124,26 +147,42 @@ void run_bridge(HMODULE self) noexcept {
 
     DependencyManager deps{data_dir / "bin"};
 
+    // Worker process: delegates CreateProcess calls to a small external exe
+    // so the fork() Wine performs is cheap (~5 MB) instead of copying the
+    // game's multi-GB page table.  Falls back to direct spawn if absent.
+    worker::WorkerClient worker;
+    {
+        auto worker_exe = data_dir / "fh6-radio-worker.exe";
+        if (!std::filesystem::exists(worker_exe))
+            worker_exe = dir / "fh6-radio" / "fh6-radio-worker.exe";
+        if (worker.start(worker_exe))
+            log::info("[bridge] worker process started");
+        else
+            log::warn("[bridge] worker process unavailable -- falling back to direct spawn");
+    }
+
     // Register/unregister sources to match the enabled flags. Called at
     // startup and on every config change so toggling enabled adds/removes
     // the dashboard tile live, without a game restart.
-    auto sync_sources = [&mgr, &data_dir](const Config& c) {
+    auto sync_sources = [&mgr, &data_dir, &worker](const Config& c) {
         if (c.local_files.enabled && !mgr.find("local_files")) {
-            auto src = std::make_unique<sources::LocalFileSource>(c.local_files,
-                                                                  c.general.ffmpeg_path);
+            auto src = std::make_unique<sources::LocalFileSource>(
+                c.local_files, c.general.ffmpeg_path, data_dir / "local_index.json", &worker);
             if (src->initialize()) mgr.register_source(std::move(src));
         } else if (!c.local_files.enabled && mgr.find("local_files")) {
             mgr.unregister_source("local_files");
         }
         if (c.youtube_music.enabled && !mgr.find("youtube_music")) {
             auto src = std::make_unique<sources::YouTubeMusicSource>(c.youtube_music,
-                                                                     c.general.ffmpeg_path);
+                                                                     c.general.ffmpeg_path,
+                                                                     &worker);
             if (src->initialize()) mgr.register_source(std::move(src));
         } else if (!c.youtube_music.enabled && mgr.find("youtube_music")) {
             mgr.unregister_source("youtube_music");
         }
         if (c.jellyfin.enabled && !mgr.find("jellyfin")) {
-            auto src = std::make_unique<sources::JellyfinSource>(c.jellyfin, c.general.ffmpeg_path);
+            auto src = std::make_unique<sources::JellyfinSource>(c.jellyfin, c.general.ffmpeg_path,
+                                                                  &worker);
             if (src->initialize()) mgr.register_source(std::move(src));
         } else if (!c.jellyfin.enabled && mgr.find("jellyfin")) {
             mgr.unregister_source("jellyfin");
@@ -162,8 +201,8 @@ void run_bridge(HMODULE self) noexcept {
             mgr.unregister_source("external_audio");
         }
         if (c.spotify.enabled && !mgr.find("spotify")) {
-            auto src = std::make_unique<sources::SpotifySource>(
-                anchor_spotify(c.spotify, data_dir), c.general.ffmpeg_path);
+            auto src = std::make_unique<sources::SpotifySource>(anchor_spotify(c.spotify, data_dir),
+                                                                c.general.ffmpeg_path);
             if (src->initialize()) mgr.register_source(std::move(src));
         } else if (!c.spotify.enabled && mgr.find("spotify")) {
             mgr.unregister_source("spotify");
@@ -173,7 +212,19 @@ void run_bridge(HMODULE self) noexcept {
     sync_sources(with_resolved_bins(cfg, deps));
 
     if (!mgr.switch_to(cfg.general.default_source) && !mgr.switch_to(cfg.general.fallback_source)) {
-        log::warn("[bridge] neither default nor fallback source was registered");
+        auto snap = mgr.sources_snapshot();
+        if (snap.empty()) {
+            log::warn("[bridge] no sources registered");
+        } else if (snap.size() == 1) {
+            if (!mgr.switch_to(snap[0]->name())) {
+                log::error("[bridge] failed to switch to sole registered source '{}'",
+                           snap[0]->name());
+            }
+        } else {
+            log::warn("[bridge] configured default/fallback sources not found among {} registered "
+                      "sources",
+                      snap.size());
+        }
     }
 
     fmod_bridge::DSPBridge bridge{mgr, fns};
@@ -181,9 +232,10 @@ void run_bridge(HMODULE self) noexcept {
     bridge.set_force_stereo_audio(cfg.playback.force_stereo_audio);
 
     std::unique_ptr<fmod_bridge::ControlLoop> ctrl;
-    if (fns.ready())
+    if (fns.ready()) {
         ctrl = std::make_unique<fmod_bridge::ControlLoop>(bridge, img, cfg.playback,
                                                           cfg.audio.output_gain);
+    }
 
     for (auto* s : mgr.sources_snapshot()) s->set_playback_options(cfg.playback);
 
@@ -192,7 +244,16 @@ void run_bridge(HMODULE self) noexcept {
         const Config c = with_resolved_bins(raw, deps);
         sync_sources(c);
         if (!mgr.active()) {
-            if (!mgr.switch_to(c.general.default_source)) mgr.switch_to(c.general.fallback_source);
+            if (!mgr.switch_to(c.general.default_source) &&
+                !mgr.switch_to(c.general.fallback_source)) {
+                auto snap = mgr.sources_snapshot();
+                if (snap.size() == 1) {
+                    if (!mgr.switch_to(snap[0]->name())) {
+                        log::error("[bridge] failed to switch to sole registered source '{}'",
+                                   snap[0]->name());
+                    }
+                }
+            }
         }
 
         // Push the gain to both: the control loop's ramper otherwise snaps
@@ -201,9 +262,8 @@ void run_bridge(HMODULE self) noexcept {
         bridge.set_force_stereo_audio(c.playback.force_stereo_audio);
         if (ctrl_ptr) ctrl_ptr->set_configured_gain(c.audio.output_gain);
         if (auto* local = dynamic_cast<sources::LocalFileSource*>(mgr.find("local_files"))) {
-            local->set_shuffle(c.local_files.shuffle);
             local->set_ffmpeg_path(c.general.ffmpeg_path);
-            local->set_directory(c.local_files.music_dir, c.local_files.recursive);
+            local->set_config(c.local_files);
             if (mgr.active() == local && local->track_count() > 0 &&
                 local->playback_state() != PlaybackState::playing) {
                 local->play();

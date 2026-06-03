@@ -28,4 +28,19 @@ export const api = {
   getExternalAudio: () => request("/api/external_audio/devices"),
   putExternalAudio: config => request("/api/external_audio/config", { method: "PUT", body: config }),
   getDeps: () => request("/api/deps"),
+
+  // Local Files
+  browseFs: path => request("/api/fs/browse", { method: "POST", body: { path: path || "" } }),
+  getLocalStations: () => request("/api/source/local_files/stations"),
+  putLocalStations: (stations, activeStation) =>
+    request("/api/source/local_files/stations", {
+      method: "PUT",
+      body: { stations, active_station: activeStation },
+    }),
+  activateLocalStation: name =>
+    request("/api/source/local_files/activate", { method: "POST", body: { name } }),
+  getLocalQueue: () => request("/api/source/local_files/queue"),
+  playLocalIndex: index =>
+    request("/api/source/local_files/play", { method: "POST", body: { index } }),
+  reshuffleLocal: () => request("/api/source/local_files/reshuffle", { method: "POST" }),
 };

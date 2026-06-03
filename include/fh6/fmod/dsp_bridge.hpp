@@ -19,20 +19,20 @@ struct FMODFns {
     using SystemCreateDSP_t = uint32_t (*)(void* system, const void* desc, void** out);
     using DSPRelease_t      = uint32_t (*)(void* dsp);
 
-    using ChannelControlAddDSP_t  = uint32_t (*)(uint64_t channel_handle, int32_t index, void* dsp);
-    using ChannelControlRemDSP_t  = uint32_t (*)(uint64_t channel_handle, void* dsp);
+    using ChannelControlAddDSP_t = uint32_t (*)(uint64_t channel_handle, int32_t index, void* dsp);
+    using ChannelControlRemDSP_t = uint32_t (*)(uint64_t channel_handle, void* dsp);
 
     using HandleResolver_t = uint32_t (*)(uint32_t handle, void** out_inst, uint64_t* out_kind);
     // Handle::unlock. Must pair every open or the handle table leaks a
     // slot and the game thread eventually freezes contending on it.
     using HandleUnlock_t = uint32_t (*)(uint64_t lock_state);
 
-    SystemCreateDSP_t system_create_dsp              = nullptr;
-    DSPRelease_t dsp_release                         = nullptr;
-    ChannelControlAddDSP_t channel_control_add_dsp   = nullptr;
-    ChannelControlRemDSP_t channel_control_rem_dsp   = nullptr;
-    HandleResolver_t handle_resolver                 = nullptr;
-    HandleUnlock_t handle_unlock                     = nullptr;
+    SystemCreateDSP_t system_create_dsp            = nullptr;
+    DSPRelease_t dsp_release                       = nullptr;
+    ChannelControlAddDSP_t channel_control_add_dsp = nullptr;
+    ChannelControlRemDSP_t channel_control_rem_dsp = nullptr;
+    HandleResolver_t handle_resolver               = nullptr;
+    HandleUnlock_t handle_unlock                   = nullptr;
 
     // Game module base, kept so the bridge can re-scan for createDSP at
     // install time if the LEA wasn't resident at DLL load.
@@ -42,8 +42,8 @@ struct FMODFns {
     // best-effort: install proceeds without it (missing unlock just leaks
     // resolver slots).
     bool ready() const noexcept {
-        return host_base && dsp_release && channel_control_add_dsp &&
-               channel_control_rem_dsp && handle_resolver;
+        return host_base && dsp_release && channel_control_add_dsp && channel_control_rem_dsp &&
+               handle_resolver;
     }
 };
 
@@ -81,7 +81,9 @@ public:
     float gain() const noexcept { return gain_.load(std::memory_order_acquire); }
     void set_gain(float g) noexcept { gain_.store(g, std::memory_order_release); }
 
-    bool force_stereo_audio() const noexcept { return force_stereo_audio_.load(std::memory_order_acquire); }
+    bool force_stereo_audio() const noexcept {
+        return force_stereo_audio_.load(std::memory_order_acquire);
+    }
     // Only steers the read callback's channel count (1 = mono, 2 = stereo);
     // FMOD re-queries *out_channels every callback, so no channel-mode touch.
     void set_force_stereo_audio(bool v) noexcept {
@@ -113,12 +115,13 @@ private:
     AudioSourceManager& mgr_;
     FMODFns fns_;
 
-    void* fmod_system_       = nullptr;
-    void* current_dsp_       = nullptr;
+    void* fmod_system_ = nullptr;
+    void* current_dsp_ = nullptr;
     // Channel handle the DSP is installed on. Mutated from the control-loop
     // thread via install/release/retarget; read from the same thread.
     std::atomic<uint32_t> current_handle_{0};
-    mutable uint32_t last_bad_handle_ = 0;  // suppress repeated rc=3 / SEH warnings for the same handle
+    mutable uint32_t last_bad_handle_ =
+        0; // suppress repeated rc=3 / SEH warnings for the same handle
     std::byte* radio_stream_ = nullptr;
 
     std::atomic<DSPMode> mode_{DSPMode::pcm};

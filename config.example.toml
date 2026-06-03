@@ -3,7 +3,7 @@
 # if you prefer hand edits. Windows paths should use TOML literal strings
 # (single quotes) so backslashes pass through verbatim:
 #
-#   music_dir = 'C:\Users\you\Music'
+#   roots = ['C:\Users\you\Music']
 
 [general]
 port              = 8420
@@ -14,11 +14,20 @@ ffmpeg_path       = ''                # blank = auto-download to fh6-radio/bin (
 
 [local_files]
 enabled            = true
-music_dir          = ''                # blank => set from the dashboard
-recursive          = true
-shuffle            = true
+active_station     = "My Music"        # which preset is on air
 # mp3/flac/wav/ogg decode natively; the rest goes through ffmpeg if available.
-supported_formats  = ["mp3", "flac", "wav", "ogg", "m4a", "opus", "aac", "wma", "aiff", "aif"]
+supported_formats  = ["mp3", "flac", "wav", "ogg", "m4a", "opus", "aac", "wma", "aiff", "aif", "m3u", "m3u8"]
+
+# Stations are presets you manage from the dashboard's Local Files card. Each one
+# can point at several folders, exclude subfolders, and set its own play order.
+[[local_files.station]]
+name      = "My Music"
+roots     = []                         # e.g. ['C:\Users\you\Music', 'D:\FLAC']
+excluded  = []                         # subfolders to skip, e.g. ['C:\Users\you\Music\Audiobooks']
+recursive = true
+order     = "shuffle"                  # "shuffle" | "album" | "name" | "folder"
+grouping  = "folder"                   # album grouping when order = "album": "folder" | "tags"
+repeat    = "all"                      # "all" | "one" | "off"
 
 [youtube_music]
 enabled            = false

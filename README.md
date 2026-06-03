@@ -15,11 +15,11 @@ An open-source radio mod for **Forza Horizon 6**. Adds a new in-game radio stati
 
 ## Features
 
-- **Local files**: point it at any folder. MP3 / FLAC / WAV / OGG play out of the box; M4A / AAC / OPUS / WMA / etc. play if `ffmpeg` is installed (same binary as YouTube Music below).
+- **Local files**: build named **stations** from one or more folders, exclude subfolders you don't want, and pick a play order (shuffle / albums / name / folder) with repeat modes and a searchable queue. MP3 / FLAC / WAV / OGG / M4A / AAC / OPUS / WMA / M3U / M3U8 etc.
 - **YouTube Music**: paste any video, playlist, or YT Music URL from the dashboard.
 - **Spotify Connect**: cast from the Spotify app to an "FH6 Universal Radio" device (requires Spotify Premium).
 - **Jellyfin**: stream playlists from your own Jellyfin server.
-- **External audio**: capture any Windows app (Deezer, a browser tab...) and pipe it into the radio through a virtual audio cable; metadata and next/previous come from the Windows media session.
+- **External audio**: capture any Windows app (Deezer, a browser tab...) and pipe it into the radio through a virtual audio cable.
 - **In-game radio integration**: audio is routed through FH6's radio bus, fades with menus and reacts to in-game volume like every other station.
 - **Live dashboard** at `http://localhost:8420`: switch source, transport controls, volume, settings.
 - **Race start action**: on race begin, advance to next track, restart the current one, or leave it alone.
@@ -38,14 +38,9 @@ An open-source radio mod for **Forza Horizon 6**. Adds a new in-game radio stati
 
 ### Dependencies
 
-YouTube Music, Spotify, Jellyfin, and non-native local formats rely on external binaries: `yt-dlp`, `ffmpeg`, and `librespot`. The mod **downloads them automatically** on first launch into `fh6-radio\bin`, so there's nothing to install by hand. `librespot` in particular has no official Windows build, so the mod fetches a copy it [builds itself](.github/workflows/librespot.yaml).
+YouTube Music, Spotify, Jellyfin, and non-native local formats rely on external binaries: `yt-dlp`, `ffmpeg`, and `librespot`. The mod **downloads them automatically** on first launch into `fh6-radio\bin`, so there's nothing to install by hand.
 
-To manage them yourself instead, set the paths in the dashboard (**Settings > YouTube Music** for yt-dlp, **Settings > General > ffmpeg path**, **Settings > Spotify Connect** for librespot) or install with winget:
-
-```
-winget install yt-dlp.yt-dlp
-winget install Gyan.FFmpeg
-```
+To manage them yourself instead, set the paths in the dashboard (**Settings > YouTube Music** for yt-dlp, **Settings > General > ffmpeg path**, **Settings > Spotify Connect** for librespot).
 
 ### YouTube Music
 
@@ -53,7 +48,7 @@ Private/age-restricted content needs a Netscape `cookies.txt` exported from your
 
 ### Spotify Connect
 
-Enable Spotify under **Settings**, then open the Spotify app on a device on the same Wi-Fi network, tap the **Devices** icon, and pick **FH6 Universal Radio**. Playback streams straight to the game and credentials are cached so it reconnects automatically next time. Requires an old Spotify Premium account (a Spotify Connect limitation).
+Enable Spotify under **Settings**, then open the Spotify app on a device on the same Wi-Fi network, tap the **Devices** icon, and pick **FH6 Universal Radio**. Requires an old Spotify Premium account (a Spotify Connect limitation).
 
 ### External audio
 
@@ -78,7 +73,7 @@ The output is always a Windows `version.dll`. You also need the radio-station me
 
 ### Windows
 
-Requires **Visual Studio 2022+** with the *Desktop development with C++* workload (CMake is bundled).
+Requires **Visual Studio 2022+** with the *Desktop development with C++* workload.
 
 ```powershell
 .\scripts\get-deps.ps1                                                  # one-time: header-only deps
@@ -89,7 +84,7 @@ Requires **Visual Studio 2022+** with the *Desktop development with C++* workloa
 
 ### Linux (cross-compile to Windows)
 
-Requires **CMake** and **llvm-mingw** (the Clang-based MinGW-w64 toolchain, since the codebase uses MSVC SEH which GCC-mingw doesn't implement). On Arch: `sudo pacman -S llvm-mingw cmake`. On other distros, grab a release from [mstorsjo/llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) and unpack it under `/opt/llvm-mingw` (the build script auto-detects that path).
+Requires **CMake** and **llvm-mingw**. On Arch: `sudo pacman -S llvm-mingw cmake`. On other distros, grab a release from [mstorsjo/llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) and unpack it under `/opt/llvm-mingw` (the build script auto-detects that path).
 
 ```bash
 ./scripts/get-deps.sh                                                   # one-time: header-only deps
@@ -104,12 +99,9 @@ Requires **CMake** and **llvm-mingw** (the Clang-based MinGW-w64 toolchain, sinc
 |---|---|
 | Dashboard says **bridge offline** | Media overlay not installed. Re-run `install.ps1` with `dist\media\` present. |
 | New radio station doesn't show in-game | **Audio > Streamer Mode** is off. Turn it on, restart the game. |
-| Game crashes on launch | Antivirus quarantined `version.dll`. Add an exclusion for the game folder. |
-| Local files don't play | No `music_dir` set, or the folder only has unsupported formats. Set one from the dashboard. |
-| `[local] failed to open ... .m4a` (or `.opus`, `.aac`, ...) | The built-in decoder handles MP3/FLAC/WAV/OGG only; other formats are routed through `ffmpeg`. Install it (`winget install Gyan.FFmpeg`) and either put it on `PATH` or set the path under **Settings > General > ffmpeg path**. |
-| YouTube Music produces no audio | Check `%TEMP%\fh6-stderr.log` (helper-process stderr lands there). Usually missing yt-dlp/ffmpeg, expired cookies, or geo/format restrictions. |
-| Spotify device doesn't appear or won't play | Wait for `librespot` to finish downloading, confirm your phone/PC is on the same network, and that the account is Spotify Premium. Helper stderr lands in `%TEMP%\fh6-spotify-stderr.log`. |
-| Jellyfin cast returns "fetch failed" (502) | Check server URL, API key, and user ID under **Settings > Jellyfin**, that the playlist ID exists, and that the server is reachable from this machine. Jellyfin transcodes to PCM via `ffmpeg. |
+| Local files don't play | The active station has no folders, or its folders only hold unsupported formats. Add a folder in the dashboard's Local Files card. |
+| YouTube Music produces no audio | Check `%TEMP%\fh6-stderr.log` (helper-process stderr lands there). Usually expired cookies, or geo/format restrictions. |
+| Spotify device doesn't appear or won't play | Wait for `librespot` to finish downloading, confirm your phone/PC is on the same network, and that the account is Spotify Premium. |
 | External Audio plays in the background, not through the radio | You're capturing the same device the app plays on. Route the app's output to a **virtual audio cable** and select that cable as the **Capture device** (see [External audio](#external-audio)). |
 | External Audio has clicks / artifacts | Set the virtual cable to **48000 Hz** (2 ch). Other sample rates caused artifacts in testing. |
 

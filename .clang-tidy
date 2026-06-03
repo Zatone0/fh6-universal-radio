@@ -30,6 +30,7 @@ Checks: >
   -modernize-avoid-c-arrays,
   -modernize-pass-by-value,
   -modernize-use-designated-initializers,
+  -modernize-use-integer-sign-comparison,
   performance-*,
   -performance-avoid-endl,
   -performance-no-int-to-ptr,
@@ -56,6 +57,7 @@ Checks: >
 # cppcoreguidelines-pro-type-cstyle-cast:              RIP-relative pointer arithmetic in radio_discovery.cpp
 # performance-no-int-to-ptr:                           same: function-pointer reconstruction from disassembled offsets
 # modernize-use-designated-initializers:               FMOD plugin C structs -- order matters, designated init would churn
+# modernize-use-integer-sign-comparison:               Winsock SOCKET vs INVALID_SOCKET -- std::cmp_* is wrong for handle types
 # misc-use-internal-linkage:                           triggers on run_bridge() which is called from another TU (dll_main)
 
 WarningsAsErrors: ''

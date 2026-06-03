@@ -1,5 +1,13 @@
 export const EQ_BAND_LABELS = ["60 Hz", "250 Hz", "1 kHz", "4 kHz", "12 kHz"];
 
+export const SOURCE_SECTIONS = [
+  ["local_files", "Local files"],
+  ["youtube_music", "YouTube Music"],
+  ["jellyfin", "Jellyfin"],
+  ["external_audio", "External Audio"],
+  ["spotify", "Spotify Connect"],
+];
+
 // [field, label, type, ...args]. type: checkbox | text | number | select | bands.
 export const SCHEMA = [
   [
@@ -8,8 +16,8 @@ export const SCHEMA = [
     [
       ["port", "Port", "number", 1, 65535],
       ["ring_buffer_mb", "Ring buffer (MB)", "number", 1, 64],
-      ["default_source", "Default source", "text"],
-      ["fallback_source", "Fallback source", "text"],
+      ["default_source", "Default source", "source-select"],
+      ["fallback_source", "Fallback source", "source-select"],
       ["ffmpeg_path", "ffmpeg path (optional)", "text"],
     ],
   ],
@@ -18,9 +26,8 @@ export const SCHEMA = [
     "Local files",
     [
       ["enabled", "Enabled", "checkbox"],
-      ["music_dir", "Music directory", "text"],
-      ["recursive", "Scan subfolders", "checkbox"],
-      ["shuffle", "Shuffle", "checkbox"],
+      // Folders, stations, ordering and the queue live in the dedicated
+      // Local Files card on the dashboard (render/localFiles.js).
     ],
   ],
   [

@@ -47,9 +47,9 @@ public:
     virtual bool initialize()        = 0;
     virtual void shutdown() noexcept = 0;
 
-    virtual void play()      = 0;
-    virtual void pause()     = 0;
-    virtual void stop()      = 0;
+    virtual void play()  = 0;
+    virtual void pause() = 0;
+    virtual void stop()  = 0;
     virtual void next() {}
     virtual void previous() {}
     virtual void seek(uint64_t /*ms*/) {}
@@ -57,7 +57,10 @@ public:
     // ControlLoop's quickStationSkip / raceStartPlayback="next" entry.
     // Returns true iff the queue actually advanced. Default delegates to
     // next() and assumes success.
-    virtual bool skip_next() { next(); return true; }
+    virtual bool skip_next() {
+        next();
+        return true;
+    }
 
     // ControlLoop's raceStartPlayback="restart" entry. Returns true iff
     // playback actually rewound to t=0. Default is "unsupported".
@@ -75,7 +78,7 @@ public:
     // transport; pull-based sources need nothing -- they pause by not being read.
     virtual void on_radio_audible(bool /*audible*/) {}
 
-    virtual TrackInfo current_track() const               = 0;
+    virtual TrackInfo current_track() const = 0;
 
     // Local cover bytes for the current track; empty for URL-based sources.
     virtual std::optional<ArtworkImage> artwork() const { return std::nullopt; }

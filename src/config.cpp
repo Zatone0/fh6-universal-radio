@@ -59,17 +59,57 @@ Config load_config(const std::filesystem::path& path) {
         pick<std::string>(g, "fallback_source", cfg.general.fallback_source);
     cfg.general.ffmpeg_path = pick_path(g, "ffmpeg_path");
 
-    const auto& lf            = section(root, "local_files");
-    cfg.local_files.enabled   = pick<bool>(lf, "enabled", cfg.local_files.enabled);
-    cfg.local_files.music_dir = pick_path(lf, "music_dir");
-    cfg.local_files.recursive = pick<bool>(lf, "recursive", cfg.local_files.recursive);
-    cfg.local_files.shuffle   = pick<bool>(lf, "shuffle", cfg.local_files.shuffle);
+    const auto& lf                 = section(root, "local_files");
+    cfg.local_files.enabled        = pick<bool>(lf, "enabled", cfg.local_files.enabled);
+    cfg.local_files.active_station = pick<std::string>(lf, "active_station", "");
     try {
         if (lf.contains("supported_formats")) {
             auto v = toml::find<std::vector<std::string>>(lf, "supported_formats");
             if (!v.empty()) cfg.local_files.supported_formats = std::move(v);
         }
     } catch (...) {}
+
+    auto read_paths = [](const toml::value& tbl, const char* key) {
+        std::vector<std::filesystem::path> out;
+        try {
+            if (tbl.contains(key)) {
+                for (auto& s : toml::find<std::vector<std::string>>(tbl, key))
+                    if (!s.empty()) out.emplace_back(s);
+            }
+        } catch (...) {}
+        return out;
+    };
+    try {
+        if (lf.contains("station")) {
+            for (const auto& st : toml::find<std::vector<toml::value>>(lf, "station")) {
+                LocalStation s;
+                s.name      = pick<std::string>(st, "name", "");
+                s.roots     = read_paths(st, "roots");
+                s.excluded  = read_paths(st, "excluded");
+                s.recursive = pick<bool>(st, "recursive", s.recursive);
+                s.order     = pick<std::string>(st, "order", s.order);
+                s.grouping  = pick<std::string>(st, "grouping", s.grouping);
+                s.repeat    = pick<std::string>(st, "repeat", s.repeat);
+                if (s.name.empty())
+                    s.name = "Station " + std::to_string(cfg.local_files.stations.size() + 1);
+                cfg.local_files.stations.push_back(std::move(s));
+            }
+        }
+    } catch (...) {}
+
+    // Migrate the legacy flat layout (music_dir / recursive / shuffle) into a
+    // single "My Music" station so existing installs keep working untouched.
+    if (cfg.local_files.stations.empty()) {
+        auto music_dir = pick_path(lf, "music_dir");
+        LocalStation s;
+        s.name      = "My Music";
+        s.recursive = pick<bool>(lf, "recursive", true);
+        s.order     = pick<bool>(lf, "shuffle", true) ? "shuffle" : "name";
+        if (!music_dir.empty()) s.roots.push_back(std::move(music_dir));
+        cfg.local_files.stations.push_back(std::move(s));
+    }
+    if (cfg.local_files.active_station.empty())
+        cfg.local_files.active_station = cfg.local_files.stations.front().name;
 
     const auto& ym                     = section(root, "youtube_music");
     cfg.youtube_music.enabled          = pick<bool>(ym, "enabled", cfg.youtube_music.enabled);
@@ -78,21 +118,22 @@ Config load_config(const std::filesystem::path& path) {
     cfg.youtube_music.default_playlist = pick<std::string>(ym, "default_playlist", "");
     cfg.youtube_music.shuffle          = pick<bool>(ym, "shuffle", cfg.youtube_music.shuffle);
 
-    const auto& sp                     = section(root, "spotify");
-    cfg.spotify.enabled                = pick<bool>(sp, "enabled", cfg.spotify.enabled);
-    cfg.spotify.librespot_path         = pick_path(sp, "librespot_path");
+    const auto& sp             = section(root, "spotify");
+    cfg.spotify.enabled        = pick<bool>(sp, "enabled", cfg.spotify.enabled);
+    cfg.spotify.librespot_path = pick_path(sp, "librespot_path");
     if (sp.contains("cache_dir")) {
-        cfg.spotify.cache_dir          = pick_path(sp, "cache_dir");
+        cfg.spotify.cache_dir = pick_path(sp, "cache_dir");
     }
 
-    const auto& jf = section(root, "jellyfin");
-    cfg.jellyfin.enabled = pick<bool>(jf, "enabled", cfg.jellyfin.enabled);
+    const auto& jf          = section(root, "jellyfin");
+    cfg.jellyfin.enabled    = pick<bool>(jf, "enabled", cfg.jellyfin.enabled);
     cfg.jellyfin.server_url = pick<std::string>(jf, "server_url", cfg.jellyfin.server_url);
-    cfg.jellyfin.api_key = pick<std::string>(jf, "api_key", cfg.jellyfin.api_key);
-    cfg.jellyfin.user_id = pick<std::string>(jf, "user_id", cfg.jellyfin.user_id);
-    cfg.jellyfin.default_playlist = pick<std::string>(jf, "default_playlist", cfg.jellyfin.default_playlist);
+    cfg.jellyfin.api_key    = pick<std::string>(jf, "api_key", cfg.jellyfin.api_key);
+    cfg.jellyfin.user_id    = pick<std::string>(jf, "user_id", cfg.jellyfin.user_id);
+    cfg.jellyfin.default_playlist =
+        pick<std::string>(jf, "default_playlist", cfg.jellyfin.default_playlist);
     cfg.jellyfin.use_favorites = pick<bool>(jf, "use_favorites", cfg.jellyfin.use_favorites);
-    cfg.jellyfin.shuffle = pick<bool>(jf, "shuffle", cfg.jellyfin.shuffle);
+    cfg.jellyfin.shuffle       = pick<bool>(jf, "shuffle", cfg.jellyfin.shuffle);
 
     const auto& or_sec = section(root, "online_radio");
     cfg.online_radio.enabled = pick<bool>(or_sec, "enabled", cfg.online_radio.enabled);
@@ -110,7 +151,7 @@ Config load_config(const std::filesystem::path& path) {
         }
     } catch (...) {}
 
-    const auto& ea = section(root, "external_audio");
+    const auto& ea             = section(root, "external_audio");
     cfg.external_audio.enabled = pick<bool>(ea, "enabled", cfg.external_audio.enabled);
     cfg.external_audio.endpoint_id =
         pick<std::string>(ea, "endpoint_id", cfg.external_audio.endpoint_id);
@@ -140,11 +181,10 @@ Config load_config(const std::filesystem::path& path) {
     try {
         if (pb.contains("equalizer_bands")) {
             auto v = toml::find<std::vector<double>>(pb, "equalizer_bands");
-            for (std::size_t i = 0; i < cfg.playback.equalizer_bands.size() && i < v.size();
-                 ++i) {
-                float b = static_cast<float>(v[i]);
+            for (std::size_t i = 0; i < cfg.playback.equalizer_bands.size() && i < v.size(); ++i) {
+                auto b = static_cast<float>(v[i]);
                 if (b < -6.f) b = -6.f;
-                if (b > 6.f)  b =  6.f;
+                if (b > 6.f) b = 6.f;
                 cfg.playback.equalizer_bands[i] = b;
             }
         }
@@ -166,24 +206,19 @@ struct Emitter {
         out += name;
         out += "]\n";
     }
-    
-    void header_array(const char* name) {
+    void array_header(const char* name) {
         if (!out.empty()) out += '\n';
         out += "[[";
         out += name;
         out += "]]\n";
     }
-
-    void kv(std::string_view key, std::string_view str) {
-        // Literal (single-quoted) strings don't process escapes, which is
-        // what we want for Windows paths. Use them when the value contains
-        // \ or " and no '; otherwise basic double-quoted with backslash
-        // escaping.
-        const bool has_bs  = str.find('\\') != std::string_view::npos;
-        const bool has_dq  = str.find('"') != std::string_view::npos;
-        const bool has_sq  = str.find('\'') != std::string_view::npos;
-        out               += key;
-        out               += " = ";
+    // Literal (single-quoted) strings don't process escapes, which is what we
+    // want for Windows paths. Use them when the value contains \ or " and no ';
+    // otherwise basic double-quoted with backslash escaping.
+    void quoted(std::string_view str) {
+        const bool has_bs = str.find('\\') != std::string_view::npos;
+        const bool has_dq = str.find('"') != std::string_view::npos;
+        const bool has_sq = str.find('\'') != std::string_view::npos;
         if ((has_bs || has_dq) && !has_sq) {
             out += '\'';
             out += str;
@@ -196,7 +231,21 @@ struct Emitter {
             }
             out += '"';
         }
+    }
+    void kv(std::string_view key, std::string_view str) {
+        out += key;
+        out += " = ";
+        quoted(str);
         out += '\n';
+    }
+    void kv_paths(std::string_view key, const std::vector<std::filesystem::path>& v) {
+        out += key;
+        out += " = [";
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            if (i) out += ", ";
+            quoted(v[i].string());
+        }
+        out += "]\n";
     }
     void kv(std::string_view key, bool v) {
         out += key;
@@ -258,10 +307,18 @@ void save_config(const std::filesystem::path& path, const Config& cfg) {
 
     e.header("local_files");
     e.kv("enabled", cfg.local_files.enabled);
-    e.kv_path("music_dir", cfg.local_files.music_dir);
-    e.kv("recursive", cfg.local_files.recursive);
-    e.kv("shuffle", cfg.local_files.shuffle);
+    e.kv("active_station", cfg.local_files.active_station);
     e.kv_strs("supported_formats", cfg.local_files.supported_formats);
+    for (const auto& st : cfg.local_files.stations) {
+        e.array_header("local_files.station");
+        e.kv("name", st.name);
+        e.kv_paths("roots", st.roots);
+        e.kv_paths("excluded", st.excluded);
+        e.kv("recursive", st.recursive);
+        e.kv("order", st.order);
+        e.kv("grouping", st.grouping);
+        e.kv("repeat", st.repeat);
+    }
 
     e.header("youtube_music");
     e.kv("enabled", cfg.youtube_music.enabled);

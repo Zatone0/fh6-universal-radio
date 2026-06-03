@@ -1,6 +1,5 @@
 #include "fh6/deps.hpp"
 #include "fh6/log.hpp"
-#include "fh6/subprocess.hpp"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -18,33 +17,27 @@ namespace {
 
 struct ToolSpec {
     const char* name;
-    const wchar_t* out_name;       // final name under bin/
+    const wchar_t* out_name; // final name under bin/
     const wchar_t* url;
-    const char* sha256;            // lowercase hex, "" = skip verification
-    const wchar_t* archive_member; // L"" = raw exe, else file to lift out of a zip
+    const char* sha256; // lowercase hex, "" = skip verification
 };
 
-// yt-dlp ships a bare exe and self-updates, so we track latest and skip the
-// hash. ffmpeg only exists as a zip upstream; BtbN's `latest` tag floats.
-// librespot has no upstream binary -- we build and host it (see
-// .github/workflows/librespot.yaml) under the `deps` release.
 constexpr std::array<ToolSpec, kToolCount> kSpecs{{
     {"ffmpeg", L"ffmpeg.exe",
-     L"https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
-     L"ffmpeg-master-latest-win64-gpl.zip",
-     "", L"ffmpeg.exe"},
+     L"https://github.com/g0ldyy/fh6-universal-radio/releases/download/deps/ffmpeg.exe", ""},
     {"yt-dlp", L"yt-dlp.exe",
-     L"https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe", "", L""},
+     L"https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe", ""},
     {"librespot", L"librespot.exe",
-     L"https://github.com/g0ldyy/fh6-universal-radio/releases/download/deps/librespot.exe",
-     "", L""},
+     L"https://github.com/g0ldyy/fh6-universal-radio/releases/download/deps/librespot.exe", ""},
 }};
 
 const ToolSpec& spec(Tool t) { return kSpecs[static_cast<std::size_t>(t)]; }
 
 struct WinHttp {
     HINTERNET h = nullptr;
-    ~WinHttp() { if (h) WinHttpCloseHandle(h); }
+    ~WinHttp() {
+        if (h) WinHttpCloseHandle(h);
+    }
     operator HINTERNET() const { return h; }
 };
 
@@ -75,23 +68,36 @@ bool download(const std::wstring& url, const std::filesystem::path& out,
     uc.dwHostNameLength  = (DWORD)-1;
     uc.dwUrlPathLength   = (DWORD)-1;
     uc.dwExtraInfoLength = (DWORD)-1;
-    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &uc)) { err = "bad url"; return false; }
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &uc)) {
+        err = "bad url";
+        return false;
+    }
     std::wstring host{uc.lpszHostName, uc.dwHostNameLength};
     std::wstring path{uc.lpszUrlPath, uc.dwUrlPathLength};
     path.append(uc.lpszExtraInfo, uc.dwExtraInfoLength);
 
     WinHttp ses{WinHttpOpen(L"fh6-universal-radio", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                             WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)};
-    if (!ses) { err = "WinHttpOpen failed"; return false; }
+    if (!ses) {
+        err = "WinHttpOpen failed";
+        return false;
+    }
     WinHttp con{WinHttpConnect(ses, host.c_str(), uc.nPort, 0)};
-    if (!con) { err = "connect failed"; return false; }
+    if (!con) {
+        err = "connect failed";
+        return false;
+    }
 
     const DWORD secure = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
     WinHttp req{WinHttpOpenRequest(con, L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER,
                                    WINHTTP_DEFAULT_ACCEPT_TYPES, secure)};
-    if (!req) { err = "open request failed"; return false; }
+    if (!req) {
+        err = "open request failed";
+        return false;
+    }
 
-    if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+    if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0,
+                            0) ||
         !WinHttpReceiveResponse(req, nullptr)) {
         err = "request failed";
         return false;
@@ -100,15 +106,18 @@ bool download(const std::wstring& url, const std::filesystem::path& out,
     DWORD code = 0, len = sizeof(code);
     WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &code,
                         &len, nullptr);
-    if (code != 200) { err = "http " + std::to_string(code); return false; }
+    if (code != 200) {
+        err = "http " + std::to_string(code);
+        return false;
+    }
 
     DWORD content = 0;
-    len = sizeof(content);
+    len           = sizeof(content);
     if (WinHttpQueryHeaders(req, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, nullptr,
                             &content, &len, nullptr))
         total.store(content, std::memory_order_relaxed);
 
-    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_ALG_HANDLE alg   = nullptr;
     BCRYPT_HASH_HANDLE hash = nullptr;
     BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
     BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0);
@@ -125,14 +134,24 @@ bool download(const std::wstring& url, const std::filesystem::path& out,
     bool ok = true;
     std::array<unsigned char, 64 * 1024> buf{};
     for (;;) {
-        if (stop.load(std::memory_order_acquire)) { ok = false; err = "aborted"; break; }
+        if (stop.load(std::memory_order_acquire)) {
+            ok  = false;
+            err = "aborted";
+            break;
+        }
         DWORD avail = 0;
-        if (!WinHttpReadData(req, buf.data(), (DWORD)buf.size(), &avail)) { ok = false; err = "read error"; break; }
+        if (!WinHttpReadData(req, buf.data(), (DWORD)buf.size(), &avail)) {
+            ok  = false;
+            err = "read error";
+            break;
+        }
         if (avail == 0) break;
         BCryptHashData(hash, buf.data(), avail, 0);
         DWORD wrote = 0;
         if (!WriteFile(f, buf.data(), avail, &wrote, nullptr) || wrote != avail) {
-            ok = false; err = "disk write error"; break;
+            ok  = false;
+            err = "disk write error";
+            break;
         }
         got.fetch_add(avail, std::memory_order_relaxed);
     }
@@ -146,62 +165,6 @@ bool download(const std::wstring& url, const std::filesystem::path& out,
     BCryptDestroyHash(hash);
     BCryptCloseAlgorithmProvider(alg, 0);
     return ok;
-}
-
-bool run_and_wait(const std::wstring& cmd) {
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-    std::wstring mut = cmd;
-    if (!CreateProcessW(nullptr, mut.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
-                        nullptr, &si, &pi))
-        return false;
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD ec = 1;
-    GetExitCodeProcess(pi.hProcess, &ec);
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return ec == 0;
-}
-
-// Pull one member out of a downloaded zip using the bsdtar bundled with
-// Windows 10 1803+ (System32\tar.exe), then drop it at dest.
-bool extract_member(const std::filesystem::path& zip, const std::wstring& member,
-                    const std::filesystem::path& dest, std::string& err) {
-    wchar_t sysdir[MAX_PATH];
-    UINT n = GetSystemDirectoryW(sysdir, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) { err = "no system dir"; return false; }
-    const std::wstring tar = std::wstring{sysdir, n} + L"\\tar.exe";
-
-    std::error_code ec;
-    const auto tmp = zip.parent_path() / "extract";
-    std::filesystem::remove_all(tmp, ec);
-    std::filesystem::create_directories(tmp, ec);
-
-    using subprocess::quote;
-    const std::wstring cmd = quote(tar) + L" -xf " + quote(zip.wstring()) + L" -C " +
-                             quote(tmp.wstring());
-    if (!run_and_wait(cmd)) {
-        std::filesystem::remove_all(tmp, ec);
-        err = "tar extraction failed";
-        return false;
-    }
-
-    bool moved = false;
-    std::filesystem::recursive_directory_iterator it{tmp, ec}, end;
-    for (; !ec && it != end; it.increment(ec)) {
-        if (it->is_regular_file(ec) && it->path().filename().wstring() == member) {
-            std::filesystem::remove(dest, ec);
-            std::filesystem::rename(it->path(), dest, ec);
-            if (ec) std::filesystem::copy_file(it->path(), dest,
-                                               std::filesystem::copy_options::overwrite_existing, ec);
-            moved = !ec;
-            break;
-        }
-    }
-    std::filesystem::remove_all(tmp, ec);
-    if (!moved) err = "member not found in archive";
-    return moved;
 }
 
 } // namespace
@@ -234,8 +197,8 @@ void DependencyManager::retry() {
 void DependencyManager::run_worker() {
     std::error_code ec;
     for (std::size_t i = 0; i < kToolCount && !stop_.load(std::memory_order_acquire); ++i) {
-        Slot& s          = slots_[i];
-        const ToolSpec& sp = spec(static_cast<Tool>(i));
+        Slot& s             = slots_[i];
+        const ToolSpec& sp  = spec(static_cast<Tool>(i));
         const auto out_path = bin_dir_ / sp.out_name;
         if (std::filesystem::exists(out_path, ec)) {
             s.present.store(true, std::memory_order_release);
@@ -251,8 +214,7 @@ void DependencyManager::run_worker() {
         }
         log::info("[deps] downloading {}", sp.name);
 
-        const bool is_archive = sp.archive_member[0] != L'\0';
-        const auto dl   = bin_dir_ / (std::wstring{sp.out_name} + (is_archive ? L".zip" : L".part"));
+        const auto dl = bin_dir_ / (std::wstring{sp.out_name} + L".part");
         std::string sha, err;
         bool ok = download(sp.url, dl, s.downloaded, s.total, sha, stop_, err);
 
@@ -260,12 +222,12 @@ void DependencyManager::run_worker() {
             ok  = false;
             err = "checksum mismatch";
         }
-        if (ok && is_archive) {
-            ok = extract_member(dl, sp.archive_member, out_path, err);
-            std::filesystem::remove(dl, ec);
-        } else if (ok) {
+        if (ok) {
             std::filesystem::rename(dl, out_path, ec);
-            if (ec) { ok = false; err = ec.message(); }
+            if (ec) {
+                ok  = false;
+                err = ec.message();
+            }
         }
         if (!ok) std::filesystem::remove(dl, ec);
 
