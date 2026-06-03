@@ -86,7 +86,7 @@ bool WorkerClient::start(const std::filesystem::path& worker_exe) {
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
-                        nullptr, &si, &pi)) {
+                        subprocess::safe_spawn_cwd(), &si, &pi)) {
         log::error("[worker] failed to launch worker (err {})", GetLastError());
         token_.clear();
         return false;

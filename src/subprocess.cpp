@@ -107,6 +107,15 @@ HANDLE open_stderr_log() {
     return h == INVALID_HANDLE_VALUE ? open_nul(GENERIC_WRITE) : h;
 }
 
+const wchar_t* safe_spawn_cwd() {
+    static const std::wstring dir = [] {
+        wchar_t buf[MAX_PATH];
+        UINT n = GetSystemDirectoryW(buf, MAX_PATH);
+        return (n > 0 && n < MAX_PATH) ? std::wstring{buf, n} : std::wstring{};
+    }();
+    return dir.empty() ? nullptr : dir.c_str();
+}
+
 HANDLE create_kill_on_close_job() {
     HANDLE job = CreateJobObjectW(nullptr, nullptr);
     if (!job) return nullptr;
@@ -133,7 +142,8 @@ HANDLE spawn_in_job(HANDLE job, const std::wstring& cmd, HANDLE stdin_h, HANDLE 
     auto launch = [&] {
         mut = cmd; // CreateProcessW may mutate the buffer; reset for the retry.
         return CreateProcessW(nullptr, mut.data(), nullptr, nullptr, TRUE,
-                              CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &si, &pi) != 0;
+                              CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, safe_spawn_cwd(), &si,
+                              &pi) != 0;
     };
     if (!launch()) {
         // First attempt missed the binary. If it looks like a stale-PATH miss

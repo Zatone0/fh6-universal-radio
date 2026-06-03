@@ -27,6 +27,8 @@ std::filesystem::path stderr_log_path();
 // like yt-dlp's deno) when the last handle drops.
 HANDLE create_kill_on_close_job();
 
+const wchar_t* safe_spawn_cwd();
+
 // CREATE_SUSPENDED + AssignProcessToJobObject + ResumeThread so fast children
 // can't spawn descendants outside the job.
 HANDLE spawn_in_job(HANDLE job, const std::wstring& cmd, HANDLE stdin_h, HANDLE stdout_h,

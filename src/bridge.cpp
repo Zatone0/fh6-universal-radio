@@ -19,6 +19,7 @@
 
 #include <windows.h>
 #include <array>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -35,6 +36,20 @@ std::filesystem::path module_directory(HMODULE self) {
     DWORD n = GetModuleFileNameW(self, buf, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return {};
     return std::filesystem::path{buf}.parent_path();
+}
+
+bool host_is_game(const std::filesystem::path& dll_dir) {
+    wchar_t buf[MAX_PATH];
+    DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return false;
+    const std::filesystem::path exe{std::wstring_view{buf, n}};
+
+    std::error_code ec;
+    if (!std::filesystem::equivalent(exe.parent_path(), dll_dir, ec)) return false;
+
+    std::wstring name = exe.filename().wstring();
+    for (wchar_t& c : name) c = static_cast<wchar_t>(std::towlower(c));
+    return name != L"gamelaunchhelper.exe";
 }
 
 SpotifyConfig anchor_spotify(SpotifyConfig sp, const std::filesystem::path& data_dir) {
@@ -91,7 +106,15 @@ bool verify_ui_credits(const std::filesystem::path& ui_dir) {
 } // namespace
 
 void run_bridge(HMODULE self) noexcept {
-    const auto dir      = module_directory(self);
+    const auto dir = module_directory(self);
+    if (!host_is_game(dir)) return; // never spawn a bridge outside the game itself
+
+    if (HANDLE guard = CreateMutexW(nullptr, TRUE, L"Local\\fh6-universal-radio-bridge");
+        guard && GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(guard);
+        return;
+    }
+
     const auto data_dir = dir / "fh6-radio";
     std::error_code ec;
     std::filesystem::create_directories(data_dir, ec);
