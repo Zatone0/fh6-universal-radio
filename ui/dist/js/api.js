@@ -19,7 +19,8 @@ export const api = {
   switchSource: source => request("/api/source/switch", { method: "POST", body: { source } }),
   transport: (source, action) => request(`/api/source/${source}/${action}`, { method: "POST" }),
   castYoutube: url => request("/api/source/youtube_music/cast", { method: "POST", body: { url } }),
-  castOnlineRadio: url => request("/api/source/online_radio/cast", { method: "POST", body: { url } }),
+  castOnlineRadio: (url, opts = {}) =>
+    request("/api/source/online_radio/cast", { method: "POST", body: { url, ...opts } }),
   shuffleYoutube: shuffle =>
     request("/api/source/youtube_music/shuffle", { method: "POST", body: { shuffle } }),
   castJellyfin: playlistId =>

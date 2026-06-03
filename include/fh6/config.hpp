@@ -23,7 +23,7 @@ struct PlaybackConfig {
 struct GeneralConfig {
     uint16_t port               = 8420;
     uint32_t ring_buffer_mb     = 4;
-    std::string default_source  = "local_files";
+    std::string default_source  = "online_radio";
     std::string fallback_source = "local_files";
     std::filesystem::path ffmpeg_path; // empty = look up on PATH; shared by all sources
 };
@@ -68,10 +68,17 @@ struct JellyfinConfig {
 struct RadioStation {
     std::string name;
     std::string url;
+    std::string favicon; // logo URL (shown as now-playing artwork)
+    std::string tags;    // comma-separated genres
+    std::string country; // ISO 3166-1 alpha-2 or display name
+    std::string codec;
+    int bitrate = 0; // kbps
+    std::string uuid;       // radio-browser stationuuid, for dedup/click counting
+    bool favorite = false;
 };
 
 struct OnlineRadioConfig {
-    bool enabled = false;
+    bool enabled = true;
     std::vector<RadioStation> stations;
     size_t default_station_index = 0;
 };

@@ -69,7 +69,9 @@ export const SCHEMA = [
     "Online Radio",
     [
       ["enabled", "Enable Online Radio", "checkbox"],
-      ["default_station_index", "Default Station (Index)", "number", 0, 99, 1]
+      ["default_station_index", "Default station", "station-select"],
+      // Stations, favourites and discovery live in the dedicated Online Radio
+      // card on the dashboard (render/onlineRadio.js).
     ],
   ],
   ["audio", "Audio", [["output_gain", "Output gain", "number", 0, 1, 0.01]]],

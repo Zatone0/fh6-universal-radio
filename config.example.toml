@@ -8,12 +8,12 @@
 [general]
 port              = 8420
 ring_buffer_mb    = 4
-default_source    = "local_files"     # local_files | youtube_music | jellyfin | external_audio
+default_source    = "online_radio"    # local_files | online_radio | youtube_music | jellyfin | external_audio | spotify
 fallback_source   = "local_files"
 ffmpeg_path       = ''                # blank = auto-download to fh6-radio/bin (else `ffmpeg` on PATH); shared by all sources
 
 [local_files]
-enabled            = true
+enabled            = false
 active_station     = "My Music"        # which preset is on air
 # mp3/flac/wav/ogg decode natively; the rest goes through ffmpeg if available.
 supported_formats  = ["mp3", "flac", "wav", "ogg", "m4a", "opus", "aac", "wma", "aiff", "aif", "m3u", "m3u8"]
@@ -61,13 +61,22 @@ librespot_path     = ''                # blank = auto-download to fh6-radio/bin 
 cache_dir          = 'spotify_cache'   # folder to save the Spotify Connect auth data
 
 [online_radio]
-enabled               = false
+enabled               = true
 default_station_index = 0 # index of radio station in list (0 refers to start of the list)
 
-# you can add as many stations as you want below
+# you can add as many stations as you want below. name + url are required; the
+# rest are filled in automatically when you save a station from the dashboard's
+# Discover tab (radio-browser.info) and are optional when adding by hand.
 #[[online_radio.stations]]
-#name = "" # name of radio station
-#url  = "" # url of radio station stream
+#name     = "" # display name
+#url      = "" # stream url
+#favicon  = "" # logo url, shown as now-playing artwork
+#tags     = "" # comma-separated genres
+#country  = "" # ISO 3166-1 alpha-2 code or name
+#codec    = "" # e.g. "mp3", "aac"
+#bitrate  = 0  # kbps
+#uuid     = "" # radio-browser station id
+#favorite = false
 
 [audio]
 output_gain = 1.0

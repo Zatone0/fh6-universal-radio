@@ -108,6 +108,8 @@ json source_to_json(IAudioSource* s) {
     }
     if (auto* yt = dynamic_cast<sources::YouTubeMusicSource*>(s))
         j["details"]["shuffle"] = yt->shuffle();
+    if (auto* rd = dynamic_cast<sources::OnlineRadioSource*>(s))
+        j["details"]["song_history"] = rd->song_history();
     return j;
 }
 
@@ -189,7 +191,15 @@ json config_to_json(const Config& c) {
              {"stations", [&c]() {
                   json arr = json::array();
                   for (const auto& st : c.online_radio.stations) {
-                      arr.push_back({{"name", st.name}, {"url", st.url}});
+                      arr.push_back({{"name", st.name},
+                                     {"url", st.url},
+                                     {"favicon", st.favicon},
+                                     {"tags", st.tags},
+                                     {"country", st.country},
+                                     {"codec", st.codec},
+                                     {"bitrate", st.bitrate},
+                                     {"uuid", st.uuid},
+                                     {"favorite", st.favorite}});
                   }
                   return arr;
               }()}
@@ -304,10 +314,18 @@ void apply_patch(Config& c, const json& j) {
         if (auto st = it->find("stations"); st != it->end() && st->is_array()) {
             c.online_radio.stations.clear();
             for (const auto& item : *st) {
-                c.online_radio.stations.push_back({
-                    item.value("name", ""),
-                    item.value("url", "")
-                });
+                RadioStation rs;
+                rs.name     = item.value("name", "");
+                rs.url      = item.value("url", "");
+                rs.favicon  = item.value("favicon", "");
+                rs.tags     = item.value("tags", "");
+                rs.country  = item.value("country", "");
+                rs.codec    = item.value("codec", "");
+                rs.bitrate  = item.value("bitrate", 0);
+                if (rs.bitrate < 0) rs.bitrate = 0;
+                rs.uuid     = item.value("uuid", "");
+                rs.favorite = item.value("favorite", false);
+                c.online_radio.stations.push_back(std::move(rs));
             }
         }
         if (c.online_radio.stations.empty()) {
@@ -811,7 +829,8 @@ struct HttpServer::Impl {
         if (m == "POST" && p == "/api/source/online_radio/cast") {
             auto* rd = find_typed<sources::OnlineRadioSource>("online_radio");
             if (!rd) return fail(404, "online_radio not registered");
-            auto url = json::parse(req.body).value("url", std::string{});
+            auto body = json::parse(req.body);
+            auto url  = body.value("url", std::string{});
             if (url.empty()) return fail(400, "url required");
             if (!sources::OnlineRadioSource::is_streamable_url(url)) {
                 return fail(400, "only http/https urls are allowed");
@@ -819,7 +838,8 @@ struct HttpServer::Impl {
 
             const bool was_active = (mgr.active() == rd);
             rd->stop();
-            rd->set_target(std::move(url));
+            rd->set_target(std::move(url), body.value("name", std::string{}),
+                           body.value("logo", std::string{}));
             if (was_active) mgr.ring().drain();
             rd->play();
             mgr.switch_to("online_radio");

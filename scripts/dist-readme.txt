@@ -3,9 +3,9 @@ FH6 Universal Radio
 
 Thanks for grabbing this. It's a free, open-source mod that drops a
 brand new station into Forza Horizon 6's radio dial. You feed it audio
-from a folder of music files on your PC, from Spotify, from any YouTube / YouTube
-Music link, from a Jellyfin server, or from any other Windows app
-(Deezer, a browser tab...), and the game treats the result
+from a folder of music files on your PC, from online radio stations, from
+Spotify, from any YouTube / YouTube Music link, from a Jellyfin server, or
+from any other Windows app (Deezer, a browser tab...), and the game treats the result
 like every other station: it ducks for menus, follows your in-game
 volume slider, and fades on the loading screen.
 
@@ -58,6 +58,11 @@ From there:
     scanned too, and you can uncheck the ones you don't want. Pick a play
     order (shuffle / albums / name / folder), a repeat mode, and browse or
     search the queue.
+
+  * Online radio: search a built-in directory of thousands of internet
+    stations by name, genre, or country and tune one in a click, or paste
+    a direct stream URL. Save favourites with their logos; the dashboard
+    also keeps a "recently played" list.
 
   * YouTube Music: paste a video URL, a playlist, or a YT Music
     link.

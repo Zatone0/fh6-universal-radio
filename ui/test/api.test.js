@@ -65,6 +65,20 @@ describe("api endpoints", () => {
     });
   });
 
+  it("castOnlineRadio carries url plus optional name/logo", async () => {
+    await api.castOnlineRadio("https://stream");
+    expect(lastCall()).toMatchObject({
+      path: "/api/source/online_radio/cast",
+      body: { url: "https://stream" },
+    });
+
+    await api.castOnlineRadio("https://stream", { name: "Jazz FM", logo: "http://logo" });
+    expect(lastCall()).toMatchObject({
+      path: "/api/source/online_radio/cast",
+      body: { url: "https://stream", name: "Jazz FM", logo: "http://logo" },
+    });
+  });
+
   it("putExternalAudio PUTs config payload", async () => {
     await api.putExternalAudio({ enabled: true, endpoint_id: "dev", media_session_id: "sess" });
     expect(lastCall()).toMatchObject({

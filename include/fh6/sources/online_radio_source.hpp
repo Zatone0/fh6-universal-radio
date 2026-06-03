@@ -6,6 +6,7 @@
 #include "fh6/worker/worker_client.hpp"
 
 #include <atomic>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -47,11 +48,15 @@ public:
 
     void set_config(const OnlineRadioConfig& c);
     void set_ffmpeg_path(std::filesystem::path p);
-    void set_target(std::string url);
+    void set_target(std::string url, std::string name = {}, std::string logo = {});
 
     // single source of truth for what may be handed to ffmpeg -i (guards every
     // playback path against file:/concat:/etc. injection from config or the API).
     static bool is_streamable_url(std::string_view url) noexcept;
+
+    // recent ICY song titles for the current stream (newest first), surfaced in
+    // /api/state details as the dashboard's track-history list.
+    std::vector<std::string> song_history() const;
 
 private:
     struct Pipe;
@@ -65,10 +70,14 @@ private:
     mutable std::mutex mu_;
     size_t current_station_idx_ = 0;
     std::string target_url_;
+    std::string target_name_;
+    std::string target_logo_;
 
     // dynamic metadata state
     std::string current_title_;
     std::string current_artist_;
+    std::string current_logo_;             // station favicon, reported as artwork_url
+    std::deque<std::string> song_history_; // newest first, capped
 
     std::atomic<PlaybackState> state_{PlaybackState::stopped};
     EqualizerStage eq_;

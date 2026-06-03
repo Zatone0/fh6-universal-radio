@@ -142,8 +142,18 @@ Config load_config(const std::filesystem::path& path) {
                   static_cast<int>(cfg.online_radio.default_station_index));
     cfg.online_radio.default_station_index = station_index < 0 ? 0u : static_cast<size_t>(station_index);
     for (const auto& st : pick<std::vector<toml::value>>(or_sec, "stations", {})) {
-        cfg.online_radio.stations.push_back(
-            {pick<std::string>(st, "name", ""), pick<std::string>(st, "url", "")});
+        RadioStation rs;
+        rs.name     = pick<std::string>(st, "name", "");
+        rs.url      = pick<std::string>(st, "url", "");
+        rs.favicon  = pick<std::string>(st, "favicon", "");
+        rs.tags     = pick<std::string>(st, "tags", "");
+        rs.country  = pick<std::string>(st, "country", "");
+        rs.codec    = pick<std::string>(st, "codec", "");
+        rs.bitrate  = pick<int>(st, "bitrate", 0);
+        if (rs.bitrate < 0) rs.bitrate = 0;
+        rs.uuid     = pick<std::string>(st, "uuid", "");
+        rs.favorite = pick<bool>(st, "favorite", false);
+        cfg.online_radio.stations.push_back(std::move(rs));
     }
 
     const auto& ea             = section(root, "external_audio");
@@ -348,6 +358,13 @@ void save_config(const std::filesystem::path& path, const Config& cfg) {
         e.array_header("online_radio.stations");
         e.kv("name", st.name);
         e.kv("url", st.url);
+        if (!st.favicon.empty()) e.kv("favicon", st.favicon);
+        if (!st.tags.empty()) e.kv("tags", st.tags);
+        if (!st.country.empty()) e.kv("country", st.country);
+        if (!st.codec.empty()) e.kv("codec", st.codec);
+        if (st.bitrate) e.kv("bitrate", (int64_t)st.bitrate);
+        if (!st.uuid.empty()) e.kv("uuid", st.uuid);
+        if (st.favorite) e.kv("favorite", true);
     }
 
     e.header("audio");

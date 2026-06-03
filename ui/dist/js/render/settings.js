@@ -28,6 +28,17 @@ function buildField(section, spec, cfg) {
     ]);
   }
 
+  if (type === "station-select") {
+    const list = cfg?.online_radio?.stations || [];
+    const options = list.length
+      ? list.map((s, i) => el("option", { value: String(i), selected: Number(cur) === i }, s.name || `Station ${i + 1}`))
+      : [el("option", { value: "0" }, "— no stations saved —")];
+    return el("div", { class: "field" }, [
+      el("label", { for: id }, label),
+      el("select", { id, dataset: { ...dataset, numeric: "1" } }, options),
+    ]);
+  }
+
   if (type === "select") {
     const options = (a || []).map(value => el("option", { value, selected: cur === value }, value));
     return el("div", { class: "field" }, [
@@ -89,6 +100,8 @@ export function collectSettings(form) {
       patch[section][key] = node.checked;
     } else if (node.type === "number" || node.type === "range") {
       patch[section][key] = parseFloat(node.value);
+    } else if (node.dataset.numeric) {
+      patch[section][key] = parseInt(node.value, 10) || 0;
     } else {
       patch[section][key] = node.value;
     }

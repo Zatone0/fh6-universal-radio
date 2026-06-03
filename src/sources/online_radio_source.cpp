@@ -71,9 +71,11 @@ void OnlineRadioSource::set_ffmpeg_path(std::filesystem::path p) {
     ffmpeg_path_ = std::move(p);
 }
 
-void OnlineRadioSource::set_target(std::string url) {
+void OnlineRadioSource::set_target(std::string url, std::string name, std::string logo) {
     std::scoped_lock lk{mu_};
-    target_url_ = std::move(url);
+    target_url_  = std::move(url);
+    target_name_ = std::move(name);
+    target_logo_ = std::move(logo);
 }
 
 void OnlineRadioSource::start_pipe_locked() {
@@ -98,12 +100,14 @@ void OnlineRadioSource::start_pipe_locked() {
     // initial metadata shown until the stream surfaces ICY/ID3 tags.
     const auto set_initial_meta = [&] {
         if (is_direct) {
-            current_artist_ = "Direct Stream";
-            current_title_  = play_url;
+            current_title_ = target_name_.empty() ? play_url : target_name_;
+            current_logo_  = target_logo_;
         } else {
-            current_artist_ = "Online Radio";
-            current_title_  = cfg_.stations[current_station_idx_].name;
+            const auto& st = cfg_.stations[current_station_idx_];
+            current_title_ = st.name;
+            current_logo_  = st.favicon;
         }
+        current_artist_ = {};
     };
 
     auto pipe = std::make_unique<Pipe>();
@@ -204,6 +208,8 @@ void OnlineRadioSource::stop() {
     std::scoped_lock lk{mu_};
     stop_pipe_locked();
     target_url_.clear();
+    target_name_.clear();
+    target_logo_.clear();
 }
 
 void OnlineRadioSource::next() {
@@ -232,8 +238,14 @@ TrackInfo OnlineRadioSource::current_track() const {
     TrackInfo info;
     info.artist      = current_artist_;
     info.title       = current_title_;
+    info.artwork_url = current_logo_;
     info.position_ms = position_ms_.load(std::memory_order_acquire);
     return info;
+}
+
+std::vector<std::string> OnlineRadioSource::song_history() const {
+    std::scoped_lock lk{mu_};
+    return {song_history_.begin(), song_history_.end()};
 }
 
 void OnlineRadioSource::set_playback_options(const PlaybackConfig& opts) {
@@ -299,6 +311,13 @@ void OnlineRadioSource::pump(RingBuffer& ring) {
             if (current_artist_ == artist && current_title_ == title) return;
             current_artist_ = artist;
             current_title_  = title;
+            if (!title.empty()) {
+                std::string entry = artist.empty() ? title : artist + " — " + title;
+                if (song_history_.empty() || song_history_.front() != entry) {
+                    song_history_.push_front(std::move(entry));
+                    if (song_history_.size() > 12) song_history_.pop_back();
+                }
+            }
             log::info("[online_radio] Metadata Update ({}): {} - {}", kind, current_artist_,
                       current_title_);
         };
