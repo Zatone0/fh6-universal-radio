@@ -2,9 +2,13 @@
 
 // Shared definitions for the DLL ↔ worker IPC protocol.
 //
-// Transport: a single bidirectional named pipe in byte mode.
+// Transport: the worker is a multi-instance named-pipe server; every control
+//            request opens its own short-lived byte-mode connection, so a slow
+//            capture never blocks an audio spawn/kill.
 // Framing:   4-byte little-endian length prefix + UTF-8 JSON body.
-// The worker creates the pipe; the DLL connects as a client.
+// Security:  pipe names embed a per-session random token, so a local process
+//            can neither squat the (otherwise well-known) name nor inject
+//            commands by guessing it.
 
 #include <windows.h>
 
@@ -14,14 +18,21 @@
 
 namespace fh6::worker {
 
-// Control channel.  One instance, bidirectional.
-constexpr const wchar_t* kControlPipeName = L"\\\\.\\pipe\\fh6-radio-ctrl";
+// Control channel:  \\.\pipe\fh6-radio-<token>-ctrl
+inline std::wstring control_pipe_name(std::wstring_view token) {
+    std::wstring s{L"\\\\.\\pipe\\fh6-radio-"};
+    s.append(token).append(L"-ctrl");
+    return s;
+}
 
-// Data-stream pipes are named   \\.\pipe\fh6-radio-<id>-<stream>
+// Data-stream pipes:  \\.\pipe\fh6-radio-<token>-<id>-<stream>
 // where <id> is the pipeline id and <stream> is "pcm" or "meta".
-inline std::wstring stream_pipe_name(uint32_t id, const wchar_t* stream) {
-    return std::wstring{L"\\\\.\\pipe\\fh6-radio-"} +
-           std::to_wstring(id) + L"-" + stream;
+inline std::wstring stream_pipe_name(std::wstring_view token, uint32_t id, const wchar_t* stream) {
+    std::wstring s{L"\\\\.\\pipe\\fh6-radio-"};
+    s.append(token).push_back(L'-');
+    s.append(std::to_wstring(id)).push_back(L'-');
+    s.append(stream);
+    return s;
 }
 
 // ---- wire helpers (length-prefixed JSON over a byte-mode pipe) ----------

@@ -60,10 +60,12 @@ public:
     void kill_pipeline(uint32_t id);
 
 private:
-    std::string send_recv(const std::string& request);
+    /// Open a fresh control connection, exchange one request/response, close.
+    /// Each call is independent, so a slow capture never blocks a spawn/kill.
+    std::string request(const std::string& req) const;
 
-    mutable std::mutex mu_;
-    HANDLE pipe_    = INVALID_HANDLE_VALUE;
+    std::wstring token_;            // per-session random pipe token (set by start)
+    mutable std::mutex mu_;         // guards the process_ handle's lifecycle only
     HANDLE process_ = nullptr;
     std::atomic<uint32_t> next_id_{1};
 };

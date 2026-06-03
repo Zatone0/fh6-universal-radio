@@ -301,11 +301,7 @@ struct LocalFileSource::Decoder {
         if (ff_pipe) { CloseHandle(ff_pipe); ff_pipe = nullptr; }
         if (worker && pipeline_id) worker->kill_pipeline(pipeline_id);
 
-        if (ff_proc) {
-            DWORD pid = GetProcessId(ff_proc);
-            if (pid) subprocess::kill_process_tree(pid);
-            CloseHandle(ff_proc);
-        }
+        subprocess::reap(ff_proc); // direct-mode child (no-op in worker mode)
         // KILL_ON_JOB_CLOSE on the job reaps ffmpeg if it's still resident.
         if (ff_job) CloseHandle(ff_job);
     }

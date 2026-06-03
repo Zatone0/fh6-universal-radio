@@ -142,11 +142,7 @@ struct JellyfinSource::Pipe {
         if (read_pipe) { CloseHandle(read_pipe); read_pipe = nullptr; }
         if (worker && pipeline_id) worker->kill_pipeline(pipeline_id);
 
-        if (proc) {
-            DWORD pid = GetProcessId(proc);
-            if (pid) subprocess::kill_process_tree(pid);
-            CloseHandle(proc);
-        }
+        subprocess::reap(proc); // direct-mode child (no-op in worker mode)
         if (job) CloseHandle(job);
     }
 };

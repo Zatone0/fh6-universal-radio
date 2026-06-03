@@ -104,7 +104,7 @@ target_include_directories(fh6-radio-worker PRIVATE
     third_party/nlohmann
 )
 
-target_link_libraries(fh6-radio-worker PRIVATE bcrypt)
+target_link_libraries(fh6-radio-worker PRIVATE advapi32)
 
 set_target_properties(fh6-radio-worker PROPERTIES
     OUTPUT_NAME fh6-radio-worker

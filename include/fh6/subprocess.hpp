@@ -35,6 +35,10 @@ HANDLE spawn_in_job(HANDLE job, const std::wstring& cmd, HANDLE stdin_h, HANDLE 
 // Crucial for Wine/Proton where Job Objects often fail to reap children.
 void kill_process_tree(DWORD pid);
 
+// Terminate a process and its entire tree, then close and null the handle.
+// No-op when proc is null. Consolidates the teardown idiom every source uses.
+void reap(HANDLE& proc) noexcept;
+
 std::string describe_launch_failure(const std::wstring& bin, DWORD ec, bool from_config);
 
 } // namespace fh6::subprocess

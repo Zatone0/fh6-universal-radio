@@ -13,7 +13,6 @@ using namespace std::chrono_literals;
 constexpr auto kTick           = 20ms;
 constexpr auto kDiscoveryRetry = 5s;
 
-
 // Ticks of no read_callback progress (while the source is producing PCM)
 // before we conclude the game tore the radio channel down. 1s @ 20ms.
 constexpr int kStaleTickThreshold = 50;
@@ -64,10 +63,8 @@ void ControlLoop::run(const std::stop_token& tok) {
              std::chrono::steady_clock::now() < t && !tok.stop_requested();)
             std::this_thread::sleep_for(kTick);
     }
-    
-    if (tok.stop_requested()) {
-        return;
-    }
+
+    if (tok.stop_requested()) return;
 
     // The radio HUD reads from the SampleProperties slots at a much lower
     // rate than the audio mixer. 4 Hz is more than enough and keeps the

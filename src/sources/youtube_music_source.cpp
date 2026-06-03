@@ -78,22 +78,10 @@ struct YouTubeMusicSource::Pipe {
         if (title_pipe) { CloseHandle(title_pipe); title_pipe = nullptr; }
         // Worker mode: ask worker to terminate the child tree.
         if (worker && pipeline_id) worker->kill_pipeline(pipeline_id);
-        // Direct mode: job + process handle cleanup.
-        if (proc_yt) {
-            DWORD pid = GetProcessId(proc_yt);
-            if (pid) subprocess::kill_process_tree(pid);
-            CloseHandle(proc_yt);
-        }
-        if (proc_ff) {
-            DWORD pid = GetProcessId(proc_ff);
-            if (pid) subprocess::kill_process_tree(pid);
-            CloseHandle(proc_ff);
-        }
-        if (proc_title) {
-            DWORD pid = GetProcessId(proc_title);
-            if (pid) subprocess::kill_process_tree(pid);
-            CloseHandle(proc_title);
-        }
+        // Direct mode: terminate each child tree (no-op in worker mode).
+        subprocess::reap(proc_yt);
+        subprocess::reap(proc_ff);
+        subprocess::reap(proc_title);
         if (job) CloseHandle(job);
     }
 };

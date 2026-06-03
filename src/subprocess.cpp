@@ -159,25 +159,58 @@ HANDLE spawn_in_job(HANDLE job, const std::wstring& cmd, HANDLE stdin_h, HANDLE 
     return pi.hProcess;
 }
 
+namespace {
+
+// Freeze every thread of `pid`. Called before we enumerate and terminate a
+// subtree so the target (a PyInstaller yt-dlp can fork faster than we walk)
+// cannot spawn new children mid-traversal, nor recycle a just-reaped PID.
+void suspend_process(DWORD pid) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    THREADENTRY32 te{};
+    te.dwSize = sizeof(te);
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != pid) continue;
+        if (HANDLE th = OpenThread(THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID)) {
+            SuspendThread(th);
+            CloseHandle(th);
+        }
+    }
+    CloseHandle(snap);
+}
+
+} // namespace
+
 void kill_process_tree(DWORD pid) {
+    // Suspend first, then walk the snapshot we captured of its (now-frozen)
+    // children before terminating it. The residual PID-reuse window at the very
+    // leaf is inherent to PID-based termination and unavoidable.
+    suspend_process(pid);
+
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap != INVALID_HANDLE_VALUE) {
-        PROCESSENTRY32W pe;
+        PROCESSENTRY32W pe{};
         pe.dwSize = sizeof(pe);
-        if (Process32FirstW(snap, &pe)) {
-            do {
-                if (pe.th32ParentProcessID == pid) {
-                    kill_process_tree(pe.th32ProcessID);
-                }
-            } while (Process32NextW(snap, &pe));
-        }
+        for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe))
+            if (pe.th32ParentProcessID == pid)
+                kill_process_tree(pe.th32ProcessID);
         CloseHandle(snap);
     }
-    HANDLE proc = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
-    if (proc) {
+
+    if (HANDLE proc = OpenProcess(PROCESS_TERMINATE, FALSE, pid)) {
         TerminateProcess(proc, 1);
         CloseHandle(proc);
     }
+}
+
+void reap(HANDLE& proc) noexcept {
+    if (!proc) return;
+    if (DWORD pid = GetProcessId(proc))
+        kill_process_tree(pid);
+    else
+        TerminateProcess(proc, 1); // fallback when the PID lookup fails
+    CloseHandle(proc);
+    proc = nullptr;
 }
 
 std::string describe_launch_failure(const std::wstring& bin, DWORD ec, bool from_config) {
