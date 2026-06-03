@@ -322,6 +322,7 @@ void apply_patch(Config& c, const json& j) {
                 rs.country  = item.value("country", "");
                 rs.codec    = item.value("codec", "");
                 rs.bitrate  = item.value("bitrate", 0);
+                if (rs.bitrate < 0) rs.bitrate = 0;
                 rs.uuid     = item.value("uuid", "");
                 rs.favorite = item.value("favorite", false);
                 c.online_radio.stations.push_back(std::move(rs));

@@ -150,6 +150,7 @@ Config load_config(const std::filesystem::path& path) {
         rs.country  = pick<std::string>(st, "country", "");
         rs.codec    = pick<std::string>(st, "codec", "");
         rs.bitrate  = pick<int>(st, "bitrate", 0);
+        if (rs.bitrate < 0) rs.bitrate = 0;
         rs.uuid     = pick<std::string>(st, "uuid", "");
         rs.favorite = pick<bool>(st, "favorite", false);
         cfg.online_radio.stations.push_back(std::move(rs));
