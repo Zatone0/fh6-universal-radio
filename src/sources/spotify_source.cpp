@@ -269,6 +269,9 @@ void SpotifySource::start_pipe_locked() {
     // FFmpeg can keep logging to the file directly
     pipe->proc_ff = spawn_in_job(pipe->job, ff_cmd, spot_out_r, ff_out_w, pipe->log_file);
     const DWORD ec_ff = pipe->proc_ff ? 0u : GetLastError();
+    // log_file is long-lived; stop later CreateProcess calls from inheriting it.
+    if (pipe->log_file && pipe->log_file != INVALID_HANDLE_VALUE)
+        SetHandleInformation(pipe->log_file, HANDLE_FLAG_INHERIT, 0);
     CloseHandle(spot_out_r);
     spot_out_r = nullptr;
     CloseHandle(ff_out_w);
@@ -419,6 +422,14 @@ void SpotifySource::pump(RingBuffer& ring) {
 
                     if (line.find("cover_group:") != std::string::npos) {
                         p->in_cover_group = true;
+                    } else if (line.find("AudioFile") != std::string::npos) {
+                        // The audio file list comes after the album's cover_group;
+                        // leaving the group resets state so a 20-byte audio file_id
+                        // is not mis-read as a cover image. A later cover_group line
+                        // re-arms the flag, so this is safe regardless of ordering.
+                        p->in_cover_group     = false;
+                        p->expecting_cover_id = false;
+                        p->next_meta_cover_bytes.clear();
                     }
 
                     // librespot prints the cover as a pretty-debug byte array;
