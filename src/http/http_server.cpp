@@ -310,6 +310,11 @@ void apply_patch(Config& c, const json& j) {
                 });
             }
         }
+        if (c.online_radio.stations.empty()) {
+            c.online_radio.default_station_index = 0;
+        } else if (c.online_radio.default_station_index >= c.online_radio.stations.size()) {
+            c.online_radio.default_station_index = 0; // or last valid index
+        }
     }
     if (auto it = j.find("audio"); it != j.end()) {
         c.audio.output_gain = pull(*it, "output_gain", c.audio.output_gain);
@@ -808,6 +813,9 @@ struct HttpServer::Impl {
             if (!rd) return fail(404, "online_radio not registered");
             auto url = json::parse(req.body).value("url", std::string{});
             if (url.empty()) return fail(400, "url required");
+            if (!(url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0)) {
+                return fail(400, "only http/https urls are allowed");
+            }
             
             const bool was_active = (mgr.active() == rd);
             rd->stop();
