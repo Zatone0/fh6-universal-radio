@@ -813,10 +813,10 @@ struct HttpServer::Impl {
             if (!rd) return fail(404, "online_radio not registered");
             auto url = json::parse(req.body).value("url", std::string{});
             if (url.empty()) return fail(400, "url required");
-            if (!(url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0)) {
+            if (!sources::OnlineRadioSource::is_streamable_url(url)) {
                 return fail(400, "only http/https urls are allowed");
             }
-            
+
             const bool was_active = (mgr.active() == rd);
             rd->stop();
             rd->set_target(std::move(url));

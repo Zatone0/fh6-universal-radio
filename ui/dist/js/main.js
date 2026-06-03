@@ -35,8 +35,6 @@ const refs = {
   jfCard: $("#jf-cast-card"),
   ytShuffle: $("#yt-shuffle"),
   orCard: $("#or-cast-card"),
-  orForm: $("#or-cast"),
-  orUrl: $("#or-url"),
   orStationView: $("#or-station-view"),
   drawer: $("#drawer"),
   scrim: $("#scrim"),
@@ -196,7 +194,6 @@ $("#yt-cast").addEventListener("submit", async e => {
   }
 });
 
-const orForm = document.getElementById("or-cast");
 const orUrlInput = $("#or-url");
 
 $("#or-cast").addEventListener("submit", async e => {

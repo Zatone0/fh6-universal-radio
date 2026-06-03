@@ -135,21 +135,16 @@ Config load_config(const std::filesystem::path& path) {
     cfg.jellyfin.use_favorites = pick<bool>(jf, "use_favorites", cfg.jellyfin.use_favorites);
     cfg.jellyfin.shuffle       = pick<bool>(jf, "shuffle", cfg.jellyfin.shuffle);
 
-    const auto& or_sec = section(root, "online_radio");
+    const auto& or_sec       = section(root, "online_radio");
     cfg.online_radio.enabled = pick<bool>(or_sec, "enabled", cfg.online_radio.enabled);
-    cfg.online_radio.default_station_index = pick<int>(or_sec, "default_station_index", static_cast<int>(cfg.online_radio.default_station_index));
-    try {
-        if (or_sec.contains("stations")) {
-            const auto& arr = toml::find<std::vector<toml::table>>(or_sec, "stations");
-            cfg.online_radio.stations.clear();
-            for (const auto& t : arr) {
-                RadioStation st;
-                if (t.count("name")) st.name = toml::get<std::string>(t.at("name"));
-                if (t.count("url"))  st.url  = toml::get<std::string>(t.at("url"));
-                cfg.online_radio.stations.push_back(st);
-            }
-        }
-    } catch (...) {}
+    const int station_index =
+        pick<int>(or_sec, "default_station_index",
+                  static_cast<int>(cfg.online_radio.default_station_index));
+    cfg.online_radio.default_station_index = station_index < 0 ? 0u : static_cast<size_t>(station_index);
+    for (const auto& st : pick<std::vector<toml::value>>(or_sec, "stations", {})) {
+        cfg.online_radio.stations.push_back(
+            {pick<std::string>(st, "name", ""), pick<std::string>(st, "url", "")});
+    }
 
     const auto& ea             = section(root, "external_audio");
     cfg.external_audio.enabled = pick<bool>(ea, "enabled", cfg.external_audio.enabled);

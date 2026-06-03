@@ -69,7 +69,6 @@ default_station_index = 0 # index of radio station in list (0 refers to start of
 #name = "" # name of radio station
 #url  = "" # url of radio station stream
 
-
 [audio]
 output_gain = 1.0
 

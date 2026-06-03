@@ -188,7 +188,8 @@ void run_bridge(HMODULE self) noexcept {
             mgr.unregister_source("jellyfin");
         }
         if (c.online_radio.enabled && !mgr.find("online_radio")) {
-            auto src = std::make_unique<sources::OnlineRadioSource>(c.online_radio, c.general.ffmpeg_path);
+            auto src = std::make_unique<sources::OnlineRadioSource>(c.online_radio,
+                                                                    c.general.ffmpeg_path, &worker);
             if (src->initialize()) mgr.register_source(std::move(src));
         } else if (!c.online_radio.enabled && mgr.find("online_radio")) {
             mgr.unregister_source("online_radio");

@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fh6::sources {
@@ -31,7 +32,7 @@ public:
     void next() override;
     void previous() override;
     bool skip_next() override { next(); return true; }
-    
+
     void pump(RingBuffer& ring) override;
     void set_playback_options(const PlaybackConfig& opts) override;
 
@@ -40,13 +41,17 @@ public:
         return state_.load(std::memory_order_acquire);
     }
     AuthState auth_state() const noexcept override { return AuthState::none_required; }
-    
+
     // capabilities: no seeking, but can go next/prev through the station list
     SourceCapabilities capabilities() const noexcept override { return {false, true, true}; }
 
     void set_config(const OnlineRadioConfig& c);
     void set_ffmpeg_path(std::filesystem::path p);
     void set_target(std::string url);
+
+    // single source of truth for what may be handed to ffmpeg -i (guards every
+    // playback path against file:/concat:/etc. injection from config or the API).
+    static bool is_streamable_url(std::string_view url) noexcept;
 
 private:
     struct Pipe;
@@ -60,11 +65,11 @@ private:
     mutable std::mutex mu_;
     size_t current_station_idx_ = 0;
     std::string target_url_;
-    
+
     // dynamic metadata state
     std::string current_title_;
     std::string current_artist_;
-    
+
     std::atomic<PlaybackState> state_{PlaybackState::stopped};
     EqualizerStage eq_;
     std::atomic<bool> volume_norm_{true};
