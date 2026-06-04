@@ -58,6 +58,9 @@ std::string unescape_debug(const std::string& s) {
 } // namespace
 
 struct SpotifySource::Pipe {
+    worker::WorkerClient* worker = nullptr;
+    uint32_t pipeline_id = 0;
+    
     HANDLE job       = nullptr;
     HANDLE proc_spot = nullptr;
     HANDLE proc_ff   = nullptr;
@@ -101,14 +104,16 @@ struct SpotifySource::Pipe {
         if (read_pipe) CloseHandle(read_pipe);
         if (err_pipe) CloseHandle(err_pipe);
         if (log_file && log_file != INVALID_HANDLE_VALUE) CloseHandle(log_file);
+        
+        if (worker && pipeline_id) worker->kill_pipeline(pipeline_id);
+        subprocess::reap(proc_spot);
+        subprocess::reap(proc_ff);
         if (job) CloseHandle(job);
-        if (proc_spot) CloseHandle(proc_spot);
-        if (proc_ff) CloseHandle(proc_ff);
     }
 };
 
-SpotifySource::SpotifySource(SpotifyConfig cfg, std::filesystem::path ffmpeg_path)
-    : cfg_{std::move(cfg)}, ffmpeg_path_{std::move(ffmpeg_path)} {
+SpotifySource::SpotifySource(SpotifyConfig cfg, std::filesystem::path ffmpeg_path, worker::WorkerClient* worker)
+    : cfg_{std::move(cfg)}, ffmpeg_path_{std::move(ffmpeg_path)}, worker_{worker} {
     info_.title  = "Ready to Cast";
     info_.artist = "Spotify Connect";
 }
@@ -168,6 +173,54 @@ void SpotifySource::start_pipe_locked() {
     stop_pipe_locked();
 
     auto pipe = std::make_unique<Pipe>();
+    
+    const auto spot = cfg_.librespot_path.empty() ? L"librespot" : cfg_.librespot_path.wstring();
+    const std::wstring ff = ffmpeg_path_.empty() ? std::wstring{L"ffmpeg"} : ffmpeg_path_.wstring();
+    const auto cache      = cfg_.cache_dir.wstring();
+    const auto tmp_dir    = (cfg_.cache_dir / L"tmp").wstring();
+
+    std::wstring spot_cmd = quote(spot) + L" --name \"FH6 Universal Radio\"" + L" --bitrate 320" +
+                            L" --backend pipe" + L" --initial-volume 100" + L" --cache " +
+                            quote(cache) + L" --tmp " + quote(tmp_dir) + L" --disable-audio-cache";
+
+    // librespot defaults to 44100Hz s16le. We must resample to 48000Hz for FH6.
+    // added flags to disable FFmpeg internal buffering for perfect UI sync
+    std::wstring ff_cmd = quote(ff) + L" -loglevel error" + L" -fflags nobuffer -flags low_delay" +
+                          L" -blocksize 4096" + // force micro-block processing
+                          L" -f s16le -ar 44100 -ac 2 -i pipe:0" + L" -flush_packets 1" +
+                          L" -f s16le -acodec pcm_s16le -ar 48000 -ac 2 pipe:1";
+
+    // request debug logs for the player module to intercept Seek events & metadata
+    SetEnvironmentVariableW(L"RUST_LOG",
+                            L"librespot_playback::player=debug,librespot_metadata=trace");
+
+    if (worker_ && worker_->alive()) {
+        // spawn the pipeline via worker_client
+        // use meta_stderr_idx = 0 to capture librespot stderr directly
+        // skip capture_stderr_meta, which would otherwise capture ffmpeg (the last process) stderr
+        // set all pipeline buffers to 4096 bytes to minimize buffering and reduce residual backlog
+        if (auto result = worker_->spawn_pipeline({spot_cmd, ff_cmd}, L"", false, 0, 4096); result.ok) {
+            SetEnvironmentVariableW(L"RUST_LOG", nullptr);
+
+            pipe->worker      = worker_;
+            pipe->pipeline_id = result.pipeline_id;
+            pipe->read_pipe   = result.pcm_pipe;
+            pipe->err_pipe    = result.meta_pipe;
+            pipe->log_file    = open_stderr_log(); // keep extraneous trace logging functional 
+            pipe_             = std::move(pipe);
+
+            info_.title  = "Streaming via Spotify Connect";
+            info_.artist = "Spotify";
+            info_.album.clear();
+            info_.artwork_url.clear();
+            state_.store(PlaybackState::playing, std::memory_order_release);
+
+            log::info("[spotify] librespot pipe started via worker (listening on network)");
+            return;
+        }
+        log::warn("[spotify] worker spawn failed -- falling back to direct spawn");
+    }
+
     pipe->job = create_kill_on_close_job();
     if (!pipe->job) {
         log::warn("[spotify] CreateJobObject failed ({})", GetLastError());
@@ -216,26 +269,6 @@ void SpotifySource::start_pipe_locked() {
     pipe->log_file = open_stderr_log(); // keep the log file open in our Pipe struct
     if (pipe->log_file && pipe->log_file != INVALID_HANDLE_VALUE)
         SetHandleInformation(pipe->log_file, HANDLE_FLAG_INHERIT, 0); // ffmpeg only, not librespot
-
-    const auto spot = cfg_.librespot_path.empty() ? L"librespot" : cfg_.librespot_path.wstring();
-    const std::wstring ff = ffmpeg_path_.empty() ? std::wstring{L"ffmpeg"} : ffmpeg_path_.wstring();
-    const auto cache      = cfg_.cache_dir.wstring();
-    const auto tmp_dir    = (cfg_.cache_dir / L"tmp").wstring();
-
-    std::wstring spot_cmd = quote(spot) + L" --name \"FH6 Universal Radio\"" + L" --bitrate 320" +
-                            L" --backend pipe" + L" --initial-volume 100" + L" --cache " +
-                            quote(cache) + L" --tmp " + quote(tmp_dir) + L" --disable-audio-cache";
-
-    // librespot defaults to 44100Hz s16le. We must resample to 48000Hz for FH6.
-    // added flags to disable FFmpeg internal buffering for perfect UI sync
-    std::wstring ff_cmd = quote(ff) + L" -loglevel error" + L" -fflags nobuffer -flags low_delay" +
-                          L" -blocksize 4096" + // force micro-block processing
-                          L" -f s16le -ar 44100 -ac 2 -i pipe:0" + L" -flush_packets 1" +
-                          L" -f s16le -acodec pcm_s16le -ar 48000 -ac 2 pipe:1";
-
-    // request debug logs for the player module to intercept Seek events & metadata
-    SetEnvironmentVariableW(L"RUST_LOG",
-                            L"librespot_playback::player=debug,librespot_metadata=trace");
 
     // pass spot_err_w to librespot instead of the raw file
     pipe->proc_spot = spawn_in_job(pipe->job, spot_cmd, nul_in, spot_out_w, spot_err_w);

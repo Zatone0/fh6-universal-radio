@@ -116,19 +116,20 @@ bool MetadataInjector::update(std::string_view title, std::string_view artist) n
     if (title == last_title_ && artist == last_artist_) return true;
 
     bool ok = true;
-    if (title != last_title_) {
-        if (write_string_slot(body_ + kTitleOffset, title)) {
-            last_title_.assign(title);
-        } else {
-            log::warn("[meta] title write failed (len={})", title.size());
-            ok = false;
-        }
-    }
+    
     if (artist != last_artist_) {
         if (write_string_slot(body_ + kArtistOffset, artist)) {
             last_artist_.assign(artist);
         } else {
             log::warn("[meta] artist write failed (len={})", artist.size());
+            ok = false;
+        }
+    }
+    if (title != last_title_) {
+        if (write_string_slot(body_ + kTitleOffset, title)) {
+            last_title_.assign(title);
+        } else {
+            log::warn("[meta] title write failed (len={})", title.size());
             ok = false;
         }
     }

@@ -160,13 +160,13 @@ void proxy_thread_fn(ProxyData* d) {
     }
 }
 
-HANDLE create_stream_pipe(const std::wstring& name) {
+HANDLE create_stream_pipe(const std::wstring& name, DWORD out_buffer_size = 1 << 20) {
     return CreateNamedPipeW(name.c_str(), PIPE_ACCESS_OUTBOUND, // server writes, client reads
                             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                            1,        // max instances
-                            1 << 20,  // out buffer 1 MB
-                            0,        // in buffer (unused for outbound)
-                            0,        // default timeout
+                            1,                 // max instances
+                            out_buffer_size,   // dynamic out buffer
+                            0,                 // in buffer (unused for outbound)
+                            0,                 // default timeout
                             g_pipe_sa);
 }
 
@@ -191,6 +191,15 @@ json handle_spawn(const json& req) {
     auto chain  = req.at("chain").get<std::vector<std::string>>();
     if (chain.empty()) return {{"ok", false}, {"error", "empty chain"}};
 
+    bool capture_stderr_meta = req.value("capture_stderr_meta", false);
+    int meta_stderr_idx = req.value("meta_stderr_idx", -1);
+    if (capture_stderr_meta && meta_stderr_idx == -1) {
+        meta_stderr_idx = static_cast<int>(chain.size() - 1);
+    }
+
+    DWORD out_buf_size = req.value("out_buffer_size", 1 << 20);
+    if (out_buf_size == 0) out_buf_size = 1 << 20;
+
     auto pl = std::make_unique<Pipeline>();
     pl->id  = id;
     pl->job = create_kill_on_close_job();
@@ -201,8 +210,7 @@ json handle_spawn(const json& req) {
     // Build the chain: each command's stdout feeds the next command's stdin.
     // The last command's stdout goes to a named pipe for the DLL to read.
     HANDLE prev_read = nul_in; // first command reads from NUL
-    bool capture_stderr_meta = req.value("capture_stderr_meta", false);
-
+    HANDLE meta_err_rd = nullptr;
     json resp = {{"ok", true}};
 
     for (size_t i = 0; i < chain.size(); ++i) {
@@ -210,10 +218,11 @@ json handle_spawn(const json& req) {
 
         SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
         HANDLE rd = nullptr, wr = nullptr;
-        if (!CreatePipe(&rd, &wr, &sa, 1 << 20)) {
+        if (!CreatePipe(&rd, &wr, &sa, out_buf_size)) {
             if (prev_read != nul_in) CloseHandle(prev_read);
             if (nul_in) CloseHandle(nul_in);
             if (err_log) CloseHandle(err_log);
+            if (meta_err_rd) CloseHandle(meta_err_rd);
             return {{"ok", false}, {"error", "CreatePipe failed"}};
         }
 
@@ -224,11 +233,12 @@ json handle_spawn(const json& req) {
         if (is_last) SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
 
         HANDLE cmd_err = err_log;
-        HANDLE err_rd = nullptr;
-        if (is_last && capture_stderr_meta) {
+        bool capture_this_meta = (static_cast<int>(i) == meta_stderr_idx);
+        
+        if (capture_this_meta) {
             HANDLE err_wr = nullptr;
-            if (CreatePipe(&err_rd, &err_wr, &sa, 1 << 16)) {
-                SetHandleInformation(err_rd, HANDLE_FLAG_INHERIT, 0);
+            if (CreatePipe(&meta_err_rd, &err_wr, &sa, 1 << 16)) {
+                SetHandleInformation(meta_err_rd, HANDLE_FLAG_INHERIT, 0);
                 cmd_err = err_wr;
             }
         }
@@ -236,7 +246,7 @@ json handle_spawn(const json& req) {
         std::wstring wcmd = widen(chain[i]);
         HANDLE proc       = spawn_in_job(pl->job, wcmd, prev_read, wr, cmd_err);
         CloseHandle(wr);
-        if (is_last && capture_stderr_meta && cmd_err != err_log) {
+        if (capture_this_meta && cmd_err != err_log) {
             CloseHandle(cmd_err);
         }
 
@@ -246,7 +256,7 @@ json handle_spawn(const json& req) {
 
         if (!proc) {
             CloseHandle(rd);
-            if (err_rd) CloseHandle(err_rd);
+            if (meta_err_rd) CloseHandle(meta_err_rd);
             if (nul_in) CloseHandle(nul_in);
             if (err_log) CloseHandle(err_log);
             return {{"ok", false}, {"error", "spawn failed for step " + std::to_string(i)}};
@@ -255,30 +265,29 @@ json handle_spawn(const json& req) {
 
         if (is_last) {
             auto pipe_name = stream_pipe_name(g_token, id, L"pcm");
-            HANDLE np      = create_stream_pipe(pipe_name);
+            HANDLE np      = create_stream_pipe(pipe_name, out_buf_size);
             if (np == INVALID_HANDLE_VALUE) {
                 CloseHandle(rd);
-                if (err_rd) CloseHandle(err_rd);
+                if (meta_err_rd) CloseHandle(meta_err_rd);
                 if (nul_in) CloseHandle(nul_in);
                 if (err_log) CloseHandle(err_log);
                 return {{"ok", false}, {"error", "CreateNamedPipe failed for pcm"}};
             }
             
             resp["pcm_pipe"] = narrow(pipe_name);
-
             pl->proxies_data.push_back(std::make_unique<ProxyData>(rd, np, std::move(pipe_name)));
             pl->proxies.emplace_back(proxy_thread_fn, pl->proxies_data.back().get());
         
-            if (capture_stderr_meta && err_rd) {
+            if (meta_err_rd) {
                 auto meta_name = stream_pipe_name(g_token, id, L"meta");
-                HANDLE mnp     = create_stream_pipe(meta_name);
+                HANDLE mnp     = create_stream_pipe(meta_name, 1 << 16);
                 if (mnp != INVALID_HANDLE_VALUE) {
                     resp["meta_pipe"] = narrow(meta_name);
                     pl->proxies_data.push_back(
-                        std::make_unique<ProxyData>(err_rd, mnp, std::move(meta_name)));
+                        std::make_unique<ProxyData>(meta_err_rd, mnp, std::move(meta_name)));
                     pl->proxies.emplace_back(proxy_thread_fn, pl->proxies_data.back().get());
                 } else {
-                    CloseHandle(err_rd);
+                    CloseHandle(meta_err_rd);
                 }
             }
         } else {
@@ -288,7 +297,7 @@ json handle_spawn(const json& req) {
 
     // Optional side command (title resolver): its stdout goes to a separate
     // named pipe so the DLL can drain metadata independently.
-    if (req.contains("side_cmd") && !capture_stderr_meta) {
+    if (req.contains("side_cmd") && !req.at("side_cmd").get<std::string>().empty() && !meta_err_rd) {
         auto side_u8 = req.at("side_cmd").get<std::string>();
         SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
         HANDLE srd = nullptr, swr = nullptr;
@@ -300,7 +309,7 @@ json handle_spawn(const json& req) {
             if (sp) {
                 pl->processes.push_back(sp);
                 auto meta_name = stream_pipe_name(g_token, id, L"meta");
-                HANDLE mnp     = create_stream_pipe(meta_name);
+                HANDLE mnp     = create_stream_pipe(meta_name, 1 << 16);
                 if (mnp != INVALID_HANDLE_VALUE) {
                     resp["meta_pipe"] = narrow(meta_name);
                     pl->proxies_data.push_back(

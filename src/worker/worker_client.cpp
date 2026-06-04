@@ -181,7 +181,9 @@ std::string WorkerClient::run_capture(const std::wstring& cmd, bool capture_stde
 
 WorkerClient::SpawnResult WorkerClient::spawn_pipeline(const std::vector<std::wstring>& chain,
                                                        const std::wstring& side_cmd,
-                                                       bool capture_stderr_meta) {
+                                                       bool capture_stderr_meta,
+                                                       int meta_stderr_idx,
+                                                       uint32_t out_buffer_size) {
     SpawnResult out;
     if (token_.empty()) return out;
 
@@ -192,7 +194,10 @@ WorkerClient::SpawnResult WorkerClient::spawn_pipeline(const std::vector<std::ws
 
     json req = {{"op", "spawn"}, {"id", out.pipeline_id}, {"chain", cmds}};
     if (!side_cmd.empty()) req["side_cmd"] = subprocess::narrow(side_cmd);
+    
     if (capture_stderr_meta) req["capture_stderr_meta"] = true;
+    if (meta_stderr_idx >= 0) req["meta_stderr_idx"] = meta_stderr_idx;
+    if (out_buffer_size > 0) req["out_buffer_size"] = out_buffer_size;
 
     auto resp_str = request(req.dump());
     if (resp_str.empty()) return out;

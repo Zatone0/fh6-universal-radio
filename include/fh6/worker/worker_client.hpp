@@ -52,7 +52,9 @@ public:
     /// optional side command whose stdout is exposed as meta_pipe.
     SpawnResult spawn_pipeline(const std::vector<std::wstring>& chain,
                                const std::wstring& side_cmd = {},
-                               bool capture_stderr_meta = false);
+                               bool capture_stderr_meta = false,
+                               int meta_stderr_idx = -1,
+                               uint32_t out_buffer_size = 0);
 
     /// Convenience: single command whose stdout is exposed as pcm_pipe.
     SpawnResult spawn_single(const std::wstring& cmd);

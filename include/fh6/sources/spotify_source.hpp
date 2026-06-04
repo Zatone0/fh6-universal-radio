@@ -2,6 +2,7 @@
 
 #include "fh6/audio_source.hpp"
 #include "fh6/config.hpp"
+#include "fh6/worker/worker_client.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -15,7 +16,7 @@ namespace fh6::sources {
 
 class SpotifySource final : public IAudioSource {
 public:
-    SpotifySource(SpotifyConfig cfg, std::filesystem::path ffmpeg_path);
+    SpotifySource(SpotifyConfig cfg, std::filesystem::path ffmpeg_path, worker::WorkerClient* worker = nullptr);
     ~SpotifySource() override;
 
     std::string_view name() const noexcept override { return "spotify"; }
@@ -54,6 +55,7 @@ private:
 
     SpotifyConfig cfg_;
     std::filesystem::path ffmpeg_path_;
+    worker::WorkerClient* worker_;
     std::unique_ptr<Pipe> pipe_;
 
     mutable std::mutex mu_;
