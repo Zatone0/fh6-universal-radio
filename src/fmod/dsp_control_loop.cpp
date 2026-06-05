@@ -74,6 +74,8 @@ void ControlLoop::run(const std::stop_token& tok) {
 
     auto next = std::chrono::steady_clock::now();
     while (!tok.stop_requested()) {
+        const auto now = std::chrono::steady_clock::now();
+        if (next < now) next = now;
         next += kTick;
         bridge_.retarget_if_needed();
         bridge_.manager().pump_once();
@@ -100,8 +102,7 @@ void ControlLoop::run(const std::stop_token& tok) {
         const std::uint64_t c = bridge_.call_count();
         if (busy && c == prev_calls_) {
             if (++stale_ticks_ >= kStaleTickThreshold) {
-                stale_ticks_   = 0;
-                const auto now = std::chrono::steady_clock::now();
+                stale_ticks_ = 0;
                 if (now - last_retune_ >= kRetuneCooldown && game_state_.read().on_target_station &&
                     game_state_.retune_streamer_station()) {
                     last_retune_ = now;
@@ -147,7 +148,7 @@ void ControlLoop::run(const std::stop_token& tok) {
             audible_source_ = nullptr;
         }
 
-        run_playback_state_machines(std::chrono::steady_clock::now());
+        run_playback_state_machines(now);
         prev_calls_ = c;
 
         const float target = [this, active] {
