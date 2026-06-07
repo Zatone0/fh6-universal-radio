@@ -11,3 +11,4 @@ third_party/
 
 # Dependency directories
 node_modules/
+/tmp

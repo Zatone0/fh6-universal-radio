@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(fh6_universal_radio LANGUAGES CXX)
+project(fh6_universal_radio LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,6 +62,7 @@ add_library(version SHARED
     src/http/http_server.cpp
     src/sources/local_file_source.cpp
     src/sources/youtube_music_source.cpp
+    src/sources/apple_music_source.cpp
     src/sources/jellyfin_source.cpp
 )
 
@@ -76,11 +77,31 @@ target_include_directories(version PRIVATE
     third_party/nlohmann
     third_party/toml11
     third_party/miniaudio
+    "$ENV{WindowsSdkDir}/Include/$ENV{WindowsSDKVersion}/cppwinrt"
 )
 
-target_link_libraries(version PRIVATE ws2_32 bcrypt psapi winhttp)
+target_link_libraries(version PRIVATE ws2_32 bcrypt psapi winhttp ole32 windowsapp winmm)
 
 set_target_properties(version PROPERTIES
     OUTPUT_NAME version
     PREFIX ""
 )
+
+add_executable(fh6-radio-companion
+    src/companion/cable_monitor.cpp
+    src/companion/fh6-radio-companion.rc
+)
+
+if(MSVC)
+    set_target_properties(fh6-radio-companion PROPERTIES
+        LINK_FLAGS "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
+    )
+else()
+    target_link_options(fh6-radio-companion PRIVATE -mwindows)
+endif()
+
+target_include_directories(fh6-radio-companion PRIVATE
+    third_party/miniaudio
+)
+
+target_link_libraries(fh6-radio-companion PRIVATE ole32)

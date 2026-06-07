@@ -10,6 +10,9 @@ namespace fh6 {
 struct PlaybackConfig {
     std::string race_start_playback = "next";   // "next" | "restart" | "ignore"
     bool quick_station_skip         = false;
+    int radio_pause_delay_ms        = 300;
+    bool radio_diagnostics          = false;
+    bool show_album_in_hud          = true;
     bool volume_normalization       = false;
     bool equalizer_enabled          = false;
     std::array<float, 5> equalizer_bands{}; // 60 / 250 / 1000 / 4000 / 12000 Hz, [-6, +6] dB
@@ -41,6 +44,15 @@ struct YouTubeMusicConfig {
     bool shuffle = true;
 };
 
+struct AppleMusicConfig {
+    bool enabled = false;
+    bool transport_controls = true;
+    bool mute_external_output = false;
+    std::string capture_mode = "auto"; // auto | process_loopback | device
+    std::string capture_device = "CABLE Output";
+    bool monitor_when_radio_inactive = true;
+};
+
 struct JellyfinConfig {
     bool enabled = false;
     std::string server_url;
@@ -58,6 +70,7 @@ struct Config {
     GeneralConfig general;
     LocalFilesConfig local_files;
     YouTubeMusicConfig youtube_music;
+    AppleMusicConfig apple_music;
     AudioConfig audio;
     JellyfinConfig jellyfin;
     PlaybackConfig playback;

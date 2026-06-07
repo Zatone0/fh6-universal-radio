@@ -3,6 +3,7 @@
 #include "fh6/config_store.hpp"
 #include "fh6/fmod/dsp_bridge.hpp"
 #include "fh6/log.hpp"
+#include "fh6/sources/apple_music_source.hpp"
 #include "fh6/sources/local_file_source.hpp"
 #include "fh6/sources/youtube_music_source.hpp"
 #include "fh6/sources/jellyfin_source.hpp"
@@ -125,6 +126,15 @@ json config_to_json(const Config& c) {
              {"default_playlist", c.youtube_music.default_playlist},
              {"shuffle", c.youtube_music.shuffle},
          }},
+        {"apple_music",
+         json{
+             {"enabled", c.apple_music.enabled},
+             {"transport_controls", c.apple_music.transport_controls},
+             {"mute_external_output", c.apple_music.mute_external_output},
+             {"capture_mode", c.apple_music.capture_mode},
+             {"capture_device", c.apple_music.capture_device},
+             {"monitor_when_radio_inactive", c.apple_music.monitor_when_radio_inactive},
+         }},
         {"jellyfin",
          json{
              {"enabled", c.jellyfin.enabled},
@@ -142,6 +152,9 @@ json config_to_json(const Config& c) {
          json{
              {"race_start_playback", c.playback.race_start_playback},
              {"quick_station_skip", c.playback.quick_station_skip},
+             {"radio_pause_delay_ms", c.playback.radio_pause_delay_ms},
+             {"radio_diagnostics", c.playback.radio_diagnostics},
+             {"show_album_in_hud", c.playback.show_album_in_hud},
              {"volume_normalization", c.playback.volume_normalization},
              {"equalizer_enabled", c.playback.equalizer_enabled},
              {"equalizer_bands", c.playback.equalizer_bands},
@@ -187,6 +200,17 @@ void apply_patch(Config& c, const json& j) {
             pull(*it, "default_playlist", c.youtube_music.default_playlist);
         c.youtube_music.shuffle = pull(*it, "shuffle", c.youtube_music.shuffle);
     }
+    if (auto it = j.find("apple_music"); it != j.end()) {
+        c.apple_music.enabled = pull(*it, "enabled", c.apple_music.enabled);
+        c.apple_music.transport_controls =
+            pull(*it, "transport_controls", c.apple_music.transport_controls);
+        c.apple_music.mute_external_output =
+            pull(*it, "mute_external_output", c.apple_music.mute_external_output);
+        c.apple_music.capture_mode = pull(*it, "capture_mode", c.apple_music.capture_mode);
+        c.apple_music.capture_device = pull(*it, "capture_device", c.apple_music.capture_device);
+        c.apple_music.monitor_when_radio_inactive =
+            pull(*it, "monitor_when_radio_inactive", c.apple_music.monitor_when_radio_inactive);
+    }
     if (auto it = j.find("jellyfin"); it != j.end()) {
         c.jellyfin.enabled          = pull(*it, "enabled", c.jellyfin.enabled);
         c.jellyfin.server_url       = pull(*it, "server_url", c.jellyfin.server_url);
@@ -204,6 +228,13 @@ void apply_patch(Config& c, const json& j) {
             c.playback.race_start_playback = std::move(rs);
         c.playback.quick_station_skip =
             pull(*it, "quick_station_skip", c.playback.quick_station_skip);
+        c.playback.radio_pause_delay_ms =
+            std::clamp(pull(*it, "radio_pause_delay_ms", c.playback.radio_pause_delay_ms),
+                       20, 5000);
+        c.playback.radio_diagnostics =
+            pull(*it, "radio_diagnostics", c.playback.radio_diagnostics);
+        c.playback.show_album_in_hud =
+            pull(*it, "show_album_in_hud", c.playback.show_album_in_hud);
         c.playback.volume_normalization =
             pull(*it, "volume_normalization", c.playback.volume_normalization);
         c.playback.force_stereo_audio =
@@ -356,6 +387,7 @@ struct HttpServer::Impl {
 
     json build_state() const {
         auto* a      = mgr.active();
+        auto meta    = bridge.metadata_status();
         json sources = json::array();
         for (auto* s : mgr.sources_snapshot()) sources.push_back(source_to_json(s));
         return json{
@@ -371,6 +403,13 @@ struct HttpServer::Impl {
                  {"out_channels", bridge.last_out_channels()},
                  {"ring_avail", mgr.ring().readable()},
                  {"ring_capacity", mgr.ring().capacity()},
+             }},
+            {"metadata",
+             json{
+                 {"last_title", meta.title},
+                 {"last_artist", meta.artist},
+                 {"last_write_ok", meta.ok},
+                 {"updates", meta.updates},
              }},
             {"sources",
              {

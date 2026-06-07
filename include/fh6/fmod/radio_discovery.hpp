@@ -34,5 +34,6 @@ void* resolve_fmod_system(const PEImage& img, std::byte* radio_stream) noexcept;
 //   5) drop hits whose SoundName chain doesn't resolve.
 // Empty result means the radio system isn't ready yet; retry later.
 DiscoveryResult discover_radio_instances(const PEImage& img) noexcept;
+void reset_radio_discovery_cache() noexcept;
 
 } // namespace fh6::fmod_bridge

@@ -62,6 +62,15 @@ public:
     // EQ band/enable updates land here. No-op for sources that don't care.
     virtual void set_playback_options(const PlaybackConfig& /*opts*/) {}
 
+    // Called when the user enters/leaves the custom FH6 radio station. Sources
+    // with external players can use this to mirror the game's pause behavior.
+    virtual void on_radio_active_changed(bool /*active*/) {}
+    virtual void on_game_foreground_changed(bool /*foreground*/) {}
+
+    // Sources that control an external player can request the game-side ring
+    // be drained after a skip/seek/restart so metadata and audio realign.
+    virtual bool consume_drain_request() noexcept { return false; }
+
     virtual TrackInfo current_track() const               = 0;
     virtual PlaybackState playback_state() const noexcept = 0;
     virtual AuthState auth_state() const noexcept         = 0;

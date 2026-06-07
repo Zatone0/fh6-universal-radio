@@ -108,6 +108,15 @@ function renderSources() {
   $("#jf-cast-card").hidden = !available.some(s => s.name === "jellyfin");
 }
 
+function renderMetadataDiagnostics() {
+  const meta = state?.metadata || {};
+  const write = meta.updates ? (meta.last_write_ok ? "ok" : "failed") : "waiting";
+  setText($("#meta-write"), write);
+  $("#meta-write")?.classList.toggle("warn", !!meta.updates && !meta.last_write_ok);
+  setText($("#meta-title"), meta.last_title || "-");
+  setText($("#meta-artist"), meta.last_artist || "-");
+}
+
 let volDirty = false;
 function renderOutput() {
   const gain = state?.audio?.output_gain ?? 0;
@@ -141,6 +150,14 @@ const SCHEMA = [
     ["default_playlist", "Default playlist URL",   "text"],
     ["shuffle",          "Shuffle",                "checkbox"],
   ]],
+  ["apple_music", "Apple Music", [
+    ["enabled",            "Enabled",            "checkbox"],
+    ["transport_controls", "Transport controls", "checkbox"],
+    ["mute_external_output", "Mute external output", "checkbox"],
+    ["capture_mode",       "Capture mode",       "select", ["auto", "process_loopback", "device"]],
+    ["capture_device",     "Capture device",     "text"],
+    ["monitor_when_radio_inactive", "Monitor off-radio", "checkbox"],
+  ]],
   ["jellyfin", "Jellyfin", [
     ["enabled",          "Enabled",          "checkbox"],
     ["server_url",       "Server URL",       "text"],
@@ -155,6 +172,9 @@ const SCHEMA = [
   ["playback", "Playback", [
     ["race_start_playback",  "Race start",                "select",   ["next", "restart", "ignore"]],
     ["quick_station_skip",   "Quick station skip",        "checkbox"],
+    ["radio_pause_delay_ms", "Radio pause delay (ms)",    "number",   20, 5000, 20],
+    ["radio_diagnostics",    "Radio diagnostics",         "checkbox"],
+    ["show_album_in_hud",    "Show album in HUD",         "checkbox"],
     ["volume_normalization", "Normalize loudness",        "checkbox"],
     ["equalizer_enabled",    "Equalizer",                 "checkbox"],
     ["equalizer_bands",      "Equalizer bands",           "bands"],
@@ -337,6 +357,7 @@ function render() {
   renderStatus();
   renderNowPlaying();
   renderSources();
+  renderMetadataDiagnostics();
   renderOutput();
 
   const yt = state?.sources?.available?.find(s => s.name === "youtube_music");

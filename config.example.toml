@@ -8,7 +8,7 @@
 [general]
 port              = 8420
 ring_buffer_mb    = 4
-default_source    = "local_files"     # local_files | youtube_music | jellyfin
+default_source    = "local_files"     # local_files | youtube_music | apple_music | jellyfin
 fallback_source   = "local_files"
 ffmpeg_path       = ''                # blank = `ffmpeg` on PATH; shared by all sources
 
@@ -27,6 +27,14 @@ yt_dlp_path        = ''                # blank = `yt-dlp` on PATH
 default_playlist   = ""
 shuffle            = true
 
+[apple_music]
+enabled            = false
+transport_controls = true              # send Windows media keys for play/pause/next/previous
+mute_external_output = false           # experimental; can also silence loopback capture on some systems
+capture_mode      = "auto"             # auto | process_loopback | device
+capture_device    = "CABLE Output"     # used when capture_mode = "device"
+monitor_when_radio_inactive = true     # monitor cable capture to default Windows output off-radio
+
 [jellyfin]
 enabled            = false
 server_url         = ''                # e.g. 'http://127.0.0.1:8096'
@@ -41,6 +49,9 @@ output_gain = 1.0
 [playback]
 race_start_playback  = "next"      # "next" | "restart" | "ignore" -- action when a race begins
 quick_station_skip   = false       # tune the radio away and back within 1s to skip the track
+radio_pause_delay_ms = 300         # how long FMOD can stop consuming audio before Apple Music pauses
+radio_diagnostics    = false       # log radio DSP input levels once per second for troubleshooting
+show_album_in_hud    = true        # show "Artist - Album" on FH6's radio artist line when available
 volume_normalization = false       # apply ReplayGain (local files) / EBU R128 loudnorm (YT) when on
 equalizer_enabled    = false
 equalizer_bands      = [0.0, 0.0, 0.0, 0.0, 0.0]   # 60/250/1000/4000/12000 Hz, [-6, +6] dB

@@ -54,10 +54,17 @@ private:
     DSPBridge& bridge_;
     const PEImage& img_;
     std::atomic<float> configured_gain_;
+    std::atomic<int> mixer_pause_delay_ms_;
     MetadataInjector meta_;
     GameStateProbe game_state_;
     std::uint64_t prev_calls_ = 0;
     int stale_ticks_          = 0;
+    int retune_attempts_      = 0;
+    bool retune_suppressed_   = false;
+    int mixer_idle_ticks_     = 0;
+    bool mixer_consuming_     = true;
+    int diagnostics_tick_      = 0;
+    std::uint64_t prev_diagnostics_calls_ = 0;
     time_point last_retune_{};  // last off/on station toggle, for cooldown
 
     // std::atomic<std::shared_ptr<T>> would be ideal here but libc++ in
@@ -68,6 +75,19 @@ private:
     std::shared_ptr<const PlaybackConfig> playback_opts_;
 
     bool prev_r10_          = false;
+    bool have_prev_r10_     = false;
+    bool prev_radio_active_ = false;
+    bool have_prev_radio_active_ = false;
+    bool prev_dsp_active_ = false;
+    bool have_prev_dsp_active_ = false;
+    bool transport_active_ = false;
+    bool have_transport_active_ = false;
+    bool raw_transport_active_ = false;
+    bool have_raw_transport_active_ = false;
+    time_point last_raw_transport_flip_{};
+    time_point prev_raw_transport_flip_{};
+    time_point last_transport_change_{};
+    time_point last_retarget_{};
     bool prev_race_         = false;
     bool prev_race_restart_ = false;
     bool quick_skip_armed_  = false;

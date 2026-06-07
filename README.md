@@ -6,7 +6,7 @@
 
 <p align="center"><img src="assets/banner.png" alt="FH6 Universal Radio" /></p>
 
-An open-source radio mod for **Forza Horizon 6**. Adds a new in-game radio station fed from your **local music**, **YouTube Music**, or **Jellyfin** server, controlled from a browser dashboard.
+An open-source radio mod for **Forza Horizon 6**. Adds a new in-game radio station fed from your **local music**, **YouTube Music**, **Apple Music**, or **Jellyfin** server, controlled from a browser dashboard.
 
 <p align="center">
   <img src="assets/ingame.png" alt="In-game radio station" width="49%" />
@@ -20,6 +20,7 @@ An open-source radio mod for **Forza Horizon 6**. Adds a new in-game radio stati
 - **Jellyfin**: stream playlists from your own Jellyfin server.
 - **In-game radio integration**: audio is routed through FH6's radio bus, fades with menus and reacts to in-game volume like every other station.
 - **Live dashboard** at `http://localhost:8420`: switch source, transport controls, volume, settings.
+- **Apple Music full-track capture**: play Apple Music in the Windows app or browser and capture authorized system output into FH6, with media-key play/pause/next/previous controls where Windows routes them.
 - **Race start action**: on race begin, advance to next track, restart the current one, or leave it alone.
 - **Quick station skip**: tune the radio knob away and back within 1s to skip the current track.
 - **Loudness normalization**: For consistent volume across tracks.
@@ -50,6 +51,31 @@ Then restart the game.
 `ffmpeg` can also be configured under **Settings > General > ffmpeg path**.
 
 Private/age-restricted content also needs a Netscape `cookies.txt` exported from your browser. Use an extension like **Get cookies.txt LOCALLY** to export it.
+
+### Apple Music
+
+Full-track Apple Music playback uses VB-CABLE to route authorized Apple Music
+audio into the FH6 radio path:
+
+```text
+Apple Music -> CABLE Input -> CABLE Output -> FH6 Universal Radio
+```
+
+1. Install VB-CABLE. If you use the Windows installer, enable the VB-CABLE task
+   when offered, approve the driver setup, then reboot Windows if prompted.
+2. Open Apple Music and start playback once.
+3. Open **Windows Settings > System > Sound > Volume mixer**.
+4. Set **Apple Music > Output device** to **CABLE Input (VB-Audio Virtual Cable)**.
+5. Leave **Apple Music > Input device** as **Default**.
+6. Start **FH6 Radio Companion**. With FH6 closed, it monitors the cable back to
+   your default headphones/speakers. With FH6 running, it releases the cable so
+   FH6 can consume the radio audio.
+7. Open <http://localhost:8420>, select **Apple Music**, and keep Apple Music
+   playing.
+
+If Apple Music is silent outside the game, check that the companion is running.
+If it is silent in game, confirm Apple Music is routed to `CABLE Input` and the
+radio config captures `CABLE Output`.
 
 ## Uninstall
 

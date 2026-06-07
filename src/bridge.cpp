@@ -9,6 +9,7 @@
 #include "fh6/fmod/dsp_control_loop.hpp"
 #include "fh6/fmod/pe_image.hpp"
 #include "fh6/http/http_server.hpp"
+#include "fh6/sources/apple_music_source.hpp"
 #include "fh6/sources/local_file_source.hpp"
 #include "fh6/sources/youtube_music_source.hpp"
 #include "fh6/sources/jellyfin_source.hpp"
@@ -69,6 +70,16 @@ bool verify_ui_credits(const std::filesystem::path& ui_dir) {
     return true;
 }
 
+bool switch_to_start_source(AudioSourceManager& mgr, const Config& cfg) {
+    const auto sources = mgr.sources_snapshot();
+    if (sources.size() == 1) {
+        log::info("[bridge] one source registered; auto-selecting '{}'", sources.front()->name());
+        return mgr.switch_to(sources.front()->name());
+    }
+    if (mgr.switch_to(cfg.general.default_source)) return true;
+    return mgr.switch_to(cfg.general.fallback_source);
+}
+
 } // namespace
 
 void run_bridge(HMODULE self) noexcept {
@@ -120,6 +131,12 @@ void run_bridge(HMODULE self) noexcept {
         } else if (!c.youtube_music.enabled && mgr.find("youtube_music")) {
             mgr.unregister_source("youtube_music");
         }
+        if (c.apple_music.enabled && !mgr.find("apple_music")) {
+            auto src = std::make_unique<sources::AppleMusicSource>(c.apple_music);
+            if (src->initialize()) mgr.register_source(std::move(src));
+        } else if (!c.apple_music.enabled && mgr.find("apple_music")) {
+            mgr.unregister_source("apple_music");
+        }
         if (c.jellyfin.enabled && !mgr.find("jellyfin")) {
             auto src = std::make_unique<sources::JellyfinSource>(c.jellyfin, c.general.ffmpeg_path);
             if (src->initialize()) mgr.register_source(std::move(src));
@@ -130,13 +147,14 @@ void run_bridge(HMODULE self) noexcept {
 
     sync_sources(cfg);
 
-    if (!mgr.switch_to(cfg.general.default_source) && !mgr.switch_to(cfg.general.fallback_source)) {
+    if (!switch_to_start_source(mgr, cfg)) {
         log::warn("[bridge] neither default nor fallback source was registered");
     }
 
     fmod_bridge::DSPBridge bridge{mgr, fns};
     bridge.set_gain(cfg.audio.output_gain);
     bridge.set_force_stereo_audio(cfg.playback.force_stereo_audio);
+    bridge.set_diagnostics_enabled(cfg.playback.radio_diagnostics);
 
     std::unique_ptr<fmod_bridge::ControlLoop> ctrl;
     if (fns.ready())
@@ -148,13 +166,14 @@ void run_bridge(HMODULE self) noexcept {
     store.on_change([&bridge, &mgr, sync_sources, ctrl_ptr = ctrl.get()](const Config& c) {
         sync_sources(c);
         if (!mgr.active()) {
-            if (!mgr.switch_to(c.general.default_source)) mgr.switch_to(c.general.fallback_source);
+            switch_to_start_source(mgr, c);
         }
 
         // Push the gain to both: the control loop's ramper otherwise snaps
         // the bridge value back to its own cached target on the next tick.
         bridge.set_gain(c.audio.output_gain);
         bridge.set_force_stereo_audio(c.playback.force_stereo_audio);
+        bridge.set_diagnostics_enabled(c.playback.radio_diagnostics);
         if (ctrl_ptr) ctrl_ptr->set_configured_gain(c.audio.output_gain);
         if (auto* local = dynamic_cast<sources::LocalFileSource*>(mgr.find("local_files"))) {
             local->set_shuffle(c.local_files.shuffle);
@@ -168,6 +187,9 @@ void run_bridge(HMODULE self) noexcept {
         if (auto* yt = dynamic_cast<sources::YouTubeMusicSource*>(mgr.find("youtube_music"))) {
             yt->set_shuffle(c.youtube_music.shuffle);
             yt->set_ffmpeg_path(c.general.ffmpeg_path);
+        }
+        if (auto* am = dynamic_cast<sources::AppleMusicSource*>(mgr.find("apple_music"))) {
+            am->set_config(c.apple_music);
         }
         if (auto* jf = dynamic_cast<sources::JellyfinSource*>(mgr.find("jellyfin"))) {
             jf->set_ffmpeg_path(c.general.ffmpeg_path);

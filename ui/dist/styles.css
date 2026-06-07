@@ -262,6 +262,14 @@ output { text-align: right; color: var(--text-dim); font-variant-numeric: tabula
 
 .stat .value { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
 
+.stat .value.small {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .stat .value.warn { color: var(--warn); }
 
 /* Settings drawer */

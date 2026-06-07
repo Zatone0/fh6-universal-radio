@@ -35,15 +35,18 @@ bool write_string_slot(std::byte* target, std::string_view src) noexcept {
     if (hdr.cap < kSsoCap) return false; // implausible -- not an std::string
     if (hdr.size > hdr.cap) return false;
 
-    const std::uint64_t new_size = static_cast<std::uint64_t>(src.size());
+    const std::uint64_t max_size = hdr.cap > kSsoCap ? hdr.cap : kSsoCap;
+    const auto clipped = src.substr(0, static_cast<std::size_t>(std::min<std::uint64_t>(
+                                      static_cast<std::uint64_t>(src.size()), max_size)));
+    const std::uint64_t new_size = static_cast<std::uint64_t>(clipped.size());
 
     auto inplace_overwrite_heap = [&]() -> bool {
         std::byte* heap = nullptr;
         std::memcpy(&heap, hdr.sso_buf, sizeof(heap));
         if (!heap) return false;
         if (!seh_call([&] {
-                std::memcpy(heap, src.data(), src.size());
-                heap[src.size()] = std::byte{0};
+                std::memcpy(heap, clipped.data(), clipped.size());
+                heap[clipped.size()] = std::byte{0};
                 std::memcpy(target + 16, &new_size, sizeof(new_size));
             }))
             return false;
@@ -52,8 +55,8 @@ bool write_string_slot(std::byte* target, std::string_view src) noexcept {
 
     auto inplace_overwrite_sso = [&]() -> bool {
         if (!seh_call([&] {
-                std::memcpy(target, src.data(), src.size());
-                target[src.size()] = std::byte{0};
+                std::memcpy(target, clipped.data(), clipped.size());
+                target[clipped.size()] = std::byte{0};
                 std::memcpy(target + 16, &new_size, sizeof(new_size));
                 // Cap stays at 15 (SSO) -- we don't touch it.
             }))
@@ -61,44 +64,8 @@ bool write_string_slot(std::byte* target, std::string_view src) noexcept {
         return true;
     };
 
-    auto allocate_and_swap = [&]() -> bool {
-        // Round up: (size + 32) & ~15. Gives the
-        // game a little headroom for in-place follow-up writes.
-        const std::uint64_t alloc_cap = (new_size + 32) & ~static_cast<std::uint64_t>(15);
-        const SIZE_T bytes            = static_cast<SIZE_T>(alloc_cap + 1);
-        auto* fresh =
-            static_cast<std::byte*>(VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE,
-                                                 PAGE_READWRITE));
-        if (!fresh) {
-            log::warn("[meta] VirtualAlloc failed for {} bytes", bytes);
-            return false;
-        }
-        std::memcpy(fresh, src.data(), src.size());
-        fresh[src.size()] = std::byte{0};
-
-        // Switch the slot atomically-enough: pointer first, then size, then
-        // cap. A racing reader picks up either the old (still-valid) buffer
-        // or the new one; never a mismatched (ptr, size, cap) trio that
-        // points past the end. The old buffer leaks deliberately.
-        if (!seh_call([&] {
-                std::memcpy(target, &fresh, sizeof(fresh));
-                std::memset(target + sizeof(fresh), 0, 16 - sizeof(fresh));
-                std::memcpy(target + 16, &new_size, sizeof(new_size));
-                std::memcpy(target + 24, &alloc_cap, sizeof(alloc_cap));
-            })) {
-            VirtualFree(fresh, 0, MEM_RELEASE);
-            return false;
-        }
-        return true;
-    };
-
     const bool is_heap = hdr.cap > kSsoCap;
-    if (is_heap) {
-        if (new_size <= hdr.cap) return inplace_overwrite_heap();
-        return allocate_and_swap();
-    }
-    if (new_size < 16) return inplace_overwrite_sso();
-    return allocate_and_swap();
+    return is_heap ? inplace_overwrite_heap() : inplace_overwrite_sso();
 }
 
 } // namespace
