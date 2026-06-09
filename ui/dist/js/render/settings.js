@@ -81,8 +81,15 @@ function buildField(section, spec, cfg) {
 export function renderSettings(form, cfg) {
   form.replaceChildren(
     ...SCHEMA.map(([section, title, fields]) => {
-      const fieldset = el("fieldset", {}, [el("legend", {}, title)]);
-      for (const spec of fields) fieldset.append(buildField(section, spec, cfg));
+      const isSource = SOURCE_SECTIONS.some(([name]) => name === section);
+      const sourceDisabled = isSource && cfg?.[section]?.enabled === false;
+      const visibleFields = sourceDisabled
+        ? fields.filter(([key]) => key === "enabled")
+        : fields;
+      const fieldset = el("fieldset", { class: sourceDisabled ? "collapsed-source" : "" }, [
+        el("legend", {}, title),
+      ]);
+      for (const spec of visibleFields) fieldset.append(buildField(section, spec, cfg));
       return fieldset;
     }),
   );
