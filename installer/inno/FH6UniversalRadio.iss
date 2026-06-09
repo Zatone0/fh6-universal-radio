@@ -39,7 +39,7 @@ Source: "{#PackageDir}\INSTALL.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\Install-VBCable.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\vbcable\*"; DestDir: "{app}\vbcable"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "{srcexe}"; DestDir: "{app}"; DestName: "FH6UniversalRadioSetup.exe"; Flags: external ignoreversion
-Source: "{#PackageDir}\version.dll"; DestDir: "{code:GetGameDir}"; Flags: ignoreversion
+Source: "{#PackageDir}\version.dll"; DestDir: "{code:GetGameDir}"; Flags: ignoreversion; BeforeInstall: BackupGameVersionDll
 Source: "{#PackageDir}\fh6-radio\ui\*"; DestDir: "{code:GetGameDir}\fh6-radio\ui"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PackageDir}\media\*"; DestDir: "{code:GetGameDir}\media"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "{#PackageDir}\config.example.toml"; DestDir: "{code:GetGameDir}\fh6-radio"; DestName: "config.toml"; Flags: onlyifdoesntexist uninsneveruninstall
@@ -70,7 +70,6 @@ Type: files; Name: "{code:GetGameDir}\package-manifest.json"
 Type: files; Name: "{code:GetGameDir}\INSTALL.txt"
 
 [UninstallDelete]
-Type: files; Name: "{code:GetGameDir}\version.dll"
 Type: filesandordirs; Name: "{app}"
 
 [Code]
@@ -266,6 +265,57 @@ begin
   Result := HasInstalledFiles(GameDir);
 end;
 
+function GameVersionDllPath(): String;
+begin
+  Result := AddBackslash(GetGameDir('')) + 'version.dll';
+end;
+
+function GameVersionDllBackupPath(): String;
+begin
+  Result := GameVersionDllPath() + '.bak';
+end;
+
+procedure BackupGameVersionDll();
+var
+  Dll: String;
+  Bak: String;
+  GameDir: String;
+begin
+  GameDir := GetGameDir('');
+  if DetectExistingInstall(GameDir) then begin
+    Log('Existing FH6 Universal Radio install detected; preserving existing version.dll backup state.');
+    Exit;
+  end;
+
+  Dll := GameVersionDllPath();
+  Bak := GameVersionDllBackupPath();
+  if FileExists(Dll) and not FileExists(Bak) then begin
+    if CopyFile(Dll, Bak, False) then
+      Log('Backed up existing version.dll to version.dll.bak.')
+    else
+      Log('Failed to back up existing version.dll before install.');
+  end;
+end;
+
+procedure RestoreGameVersionDll();
+var
+  Dll: String;
+  Bak: String;
+begin
+  Dll := GameVersionDllPath();
+  Bak := GameVersionDllBackupPath();
+  if FileExists(Bak) then begin
+    DeleteFile(Dll);
+    if RenameFile(Bak, Dll) then
+      Log('Restored version.dll from version.dll.bak.')
+    else
+      Log('Failed to restore version.dll from version.dll.bak.');
+  end else if FileExists(Dll) then begin
+    DeleteFile(Dll);
+    Log('Removed installed version.dll.');
+  end;
+end;
+
 procedure InitializeWizard();
 var
   AutoGameDir: String;
@@ -317,4 +367,10 @@ begin
       Result := False;
     end;
   end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    RestoreGameVersionDll();
 end;

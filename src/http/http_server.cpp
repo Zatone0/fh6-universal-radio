@@ -25,10 +25,13 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace fh6::http {
 
@@ -523,14 +526,22 @@ bool serve_file(SOCKET client, const std::filesystem::path& file) {
 } // namespace
 
 struct HttpServer::Impl {
+    struct ClientThread {
+        std::thread thread;
+        std::shared_ptr<std::atomic<bool>> done;
+    };
+
     AudioSourceManager& mgr;
     fmod_bridge::DSPBridge& bridge;
     ConfigStore& store;
     DependencyManager& deps;
     std::filesystem::path ui_dist;
     std::atomic<bool> stopping{false};
+    std::atomic<bool> wsa_started{false};
     SOCKET srv_sock = INVALID_SOCKET;
     std::thread thr;
+    std::mutex clients_mtx;
+    std::vector<ClientThread> clients;
 
     Impl(AudioSourceManager& m, fmod_bridge::DSPBridge& b, ConfigStore& s, DependencyManager& d,
          uint16_t port, std::filesystem::path dist)
@@ -541,6 +552,14 @@ struct HttpServer::Impl {
         stopping.store(true, std::memory_order_release);
         if (srv_sock != INVALID_SOCKET) closesocket(srv_sock);
         if (thr.joinable()) thr.join();
+        std::vector<ClientThread> remaining;
+        {
+            std::lock_guard lock{clients_mtx};
+            remaining = std::move(clients);
+        }
+        for (auto& client : remaining)
+            if (client.thread.joinable()) client.thread.join();
+        if (wsa_started.exchange(false, std::memory_order_acq_rel)) WSACleanup();
     }
 
     json build_sources() const {
@@ -594,11 +613,11 @@ struct HttpServer::Impl {
             log::error("[http] WSAStartup failed");
             return;
         }
+        wsa_started.store(true, std::memory_order_release);
 
         srv_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (srv_sock == INVALID_SOCKET) {
             log::error("[http] socket() failed");
-            WSACleanup();
             return;
         }
         BOOL yes = TRUE;
@@ -618,7 +637,6 @@ struct HttpServer::Impl {
                 log::error("[http] could not bind port {} or {}", port, bound);
                 closesocket(srv_sock);
                 srv_sock = INVALID_SOCKET;
-                WSACleanup();
                 return;
             }
         }
@@ -627,7 +645,6 @@ struct HttpServer::Impl {
             log::error("[http] listen() failed");
             closesocket(srv_sock);
             srv_sock = INVALID_SOCKET;
-            WSACleanup();
             return;
         }
         log::info("[http] listening on http://0.0.0.0:{} (LAN-reachable)", bound);
@@ -641,13 +658,33 @@ struct HttpServer::Impl {
 
             SOCKET client = accept(srv_sock, nullptr, nullptr);
             if (client == INVALID_SOCKET) continue;
-            std::thread{[this, client] {
-                handle(client);
-                closesocket(client);
-            }}.detach();
+            start_client(client);
         }
+    }
 
-        WSACleanup();
+    void start_client(SOCKET client) {
+        const DWORD timeout_ms = 5000;
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO,
+                   reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        std::thread worker{[this, client, done] {
+            handle(client);
+            closesocket(client);
+            done->store(true, std::memory_order_release);
+        }};
+
+        std::lock_guard lock{clients_mtx};
+        for (auto it = clients.begin(); it != clients.end();) {
+            if (it->done->load(std::memory_order_acquire)) {
+                if (it->thread.joinable()) it->thread.join();
+                it = clients.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        clients.push_back(ClientThread{std::move(worker), std::move(done)});
     }
 
     void handle(SOCKET client) {

@@ -48,8 +48,24 @@ if ($RemoveConfig) {
 
 $startupLink = Join-Path ([Environment]::GetFolderPath("Startup")) "FH6 Radio Companion.lnk"
 if (Test-Path $startupLink) {
-    Remove-Item $startupLink -Force
-    Write-Host "  - Startup companion shortcut"
+    $removeStartupLink = $true
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($startupLink)
+        if ($shortcut.TargetPath -and
+            -not $shortcut.TargetPath.StartsWith($AppDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $removeStartupLink = $false
+        }
+    } catch {
+        $removeStartupLink = $false
+    }
+
+    if ($removeStartupLink) {
+        Remove-Item $startupLink -Force
+        Write-Host "  - Startup companion shortcut"
+    } else {
+        Write-Host "  = Startup companion shortcut preserved"
+    }
 }
 
 if (Test-Path $AppDir) {

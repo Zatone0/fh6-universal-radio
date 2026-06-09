@@ -47,11 +47,13 @@ function Test-VBCableInstalled {
 }
 
 function Backup-AndCopy {
-    param([string] $Source, [string] $Dest, [string] $Root)
+    param([string] $Source, [string] $Dest, [string] $Root, [switch] $SkipBackup)
 
     $destDir = Split-Path -Parent $Dest
     if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Force -Path $destDir | Out-Null }
-    if (Test-Path $Dest) { Copy-Item $Dest "$Dest.bak" -Force }
+    if ((Test-Path $Dest) -and -not $SkipBackup -and -not (Test-Path "$Dest.bak")) {
+        Copy-Item $Dest "$Dest.bak" -Force
+    }
     Copy-Item $Source $Dest -Force
     Write-Host "  + $($Dest.Substring($Root.Length + 1))"
 }
@@ -90,9 +92,14 @@ Write-Host "App:  $AppDir"
 
 Stop-Companion
 
-Backup-AndCopy (Join-Path $packageRoot "version.dll") (Join-Path $gameDir "version.dll") $gameDir
-
 $gameDataDir = Join-Path $gameDir "fh6-radio"
+$existingInstall = Test-Path (Join-Path $gameDataDir "config.toml")
+Backup-AndCopy `
+    (Join-Path $packageRoot "version.dll") `
+    (Join-Path $gameDir "version.dll") `
+    $gameDir `
+    -SkipBackup:$existingInstall
+
 if (-not (Test-Path $gameDataDir)) { New-Item -ItemType Directory -Force -Path $gameDataDir | Out-Null }
 Copy-Item -Recurse -Force (Join-Path $packageRoot "fh6-radio\ui") $gameDataDir
 
