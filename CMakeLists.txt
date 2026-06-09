@@ -79,12 +79,35 @@ if(NOT MSVC)
     target_sources(version PRIVATE src/proxy/version.def)
 endif()
 
+set(FH6_CPPWINRT_HINTS)
+if(DEFINED ENV{WindowsSdkDir} AND DEFINED ENV{WindowsSDKVersion})
+    list(APPEND FH6_CPPWINRT_HINTS
+         "$ENV{WindowsSdkDir}/Include/$ENV{WindowsSDKVersion}/cppwinrt")
+endif()
+if(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION)
+    list(APPEND FH6_CPPWINRT_HINTS
+         "$ENV{ProgramFiles\(x86\)}/Windows Kits/10/Include/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/cppwinrt"
+         "$ENV{ProgramFiles}/Windows Kits/10/Include/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/cppwinrt")
+endif()
+
+find_path(FH6_CPPWINRT_INCLUDE
+    NAMES winrt/base.h
+    HINTS ${FH6_CPPWINRT_HINTS}
+    NO_DEFAULT_PATH
+)
+if(NOT FH6_CPPWINRT_INCLUDE)
+    message(FATAL_ERROR
+        "Could not find C++/WinRT headers (winrt/base.h). Install the Windows SDK "
+        "or run from a Visual Studio Developer environment that sets WindowsSdkDir "
+        "and WindowsSDKVersion.")
+endif()
+
 target_include_directories(version PRIVATE
     include
     third_party/nlohmann
     third_party/toml11
     third_party/miniaudio
-    "$ENV{WindowsSdkDir}/Include/$ENV{WindowsSDKVersion}/cppwinrt"
+    "${FH6_CPPWINRT_INCLUDE}"
 )
 
 target_link_libraries(version PRIVATE
