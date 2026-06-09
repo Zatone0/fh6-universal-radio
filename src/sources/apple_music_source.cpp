@@ -16,6 +16,7 @@
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Media.Control.h>
+#include <winrt/Windows.Storage.Streams.h>
 
 #include <algorithm>
 #include <array>
@@ -33,6 +34,7 @@ namespace fh6::sources {
 namespace {
 
 namespace media = winrt::Windows::Media::Control;
+namespace streams = winrt::Windows::Storage::Streams;
 using namespace std::chrono_literals;
 
 constexpr uint32_t kOutRate = 48000;
@@ -922,6 +924,20 @@ void AppleMusicSource::previous() {
     drain_requested_ = true;
 }
 
+void AppleMusicSource::flush_capture_packets_locked() noexcept {
+    if (!capture_client_) return;
+    for (;;) {
+        UINT32 packet_frames = 0;
+        if (FAILED(capture_client_->GetNextPacketSize(&packet_frames)) || packet_frames == 0) break;
+        BYTE* data = nullptr;
+        UINT32 frames = 0;
+        DWORD flags = 0;
+        if (FAILED(capture_client_->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
+        capture_client_->ReleaseBuffer(frames);
+    }
+    resample_accum_ = 0;
+}
+
 void AppleMusicSource::append_frames(const void* data, uint32_t frames, uint32_t flags,
                                      RingBuffer& ring) {
     if (!mix_format_ || frames == 0) return;
@@ -1026,6 +1042,7 @@ void AppleMusicSource::refresh_track_locked(bool force) {
     if (next.artist.empty()) next.artist = "Apple Music";
 
     auto key = next.title + "\n" + next.artist + "\n" + next.album;
+    refresh_artwork_locked(key);
     if (!key.empty() && !last_track_key_.empty() && key != last_track_key_) {
         position_ms_.store(0, std::memory_order_release);
         next.position_ms = 0;
@@ -1035,6 +1052,37 @@ void AppleMusicSource::refresh_track_locked(bool force) {
     }
     if (!key.empty()) last_track_key_ = std::move(key);
     cached_track_ = std::move(next);
+}
+
+void AppleMusicSource::refresh_artwork_locked(const std::string& key) {
+    if (key.empty() || key == cached_art_key_) return;
+    cached_art_key_ = key;
+    cached_art_ = {};
+
+    try {
+        if (!media_ || !media_->session) return;
+        const auto props = media_->session.TryGetMediaPropertiesAsync().get();
+        const auto ref = props.Thumbnail();
+        if (!ref) return;
+
+        const streams::IRandomAccessStreamWithContentType stream = ref.OpenReadAsync().get();
+        const uint64_t size = stream ? stream.Size() : 0;
+        if (size == 0 || size > (8ull << 20)) return;
+
+        streams::DataReader reader{stream};
+        reader.LoadAsync(static_cast<uint32_t>(size)).get();
+
+        ArtworkImage art;
+        art.bytes.resize(static_cast<std::size_t>(size));
+        reader.ReadBytes(winrt::array_view<uint8_t>(reinterpret_cast<uint8_t*>(art.bytes.data()),
+                                                    reinterpret_cast<uint8_t*>(art.bytes.data()) +
+                                                        art.bytes.size()));
+        art.mime = narrow(stream.ContentType());
+        if (art.mime.empty()) art.mime = "image/jpeg";
+        cached_art_ = std::move(art);
+    } catch (...) {
+        cached_art_ = {};
+    }
 }
 
 void AppleMusicSource::set_config(AppleMusicConfig cfg) {
@@ -1093,6 +1141,7 @@ void AppleMusicSource::on_audio_sink_active_changed(bool active) {
     std::scoped_lock lk{mu_};
     audio_sink_active_ = active;
     ignore_silent_capture_until_ = std::chrono::steady_clock::now() + 750ms;
+    flush_capture_packets_locked();
     if (active) {
         close_monitor_locked();
         return;
@@ -1124,7 +1173,17 @@ TrackInfo AppleMusicSource::current_track() const {
     if (out.title.empty()) out.title = "Apple Music";
     if (out.artist.empty()) out.artist = "Apple Music";
     out.position_ms = position_ms_.load(std::memory_order_acquire);
+    if (!cached_art_.bytes.empty() && !cached_art_key_.empty()) {
+        out.artwork_url = "/api/artwork?v=" +
+                          std::to_string(std::hash<std::string>{}(cached_art_key_));
+    }
     return out;
+}
+
+std::optional<ArtworkImage> AppleMusicSource::artwork() const {
+    std::scoped_lock lk{mu_};
+    if (!cached_art_.bytes.empty()) return cached_art_;
+    return std::nullopt;
 }
 
 std::string AppleMusicSource::auth_instructions() const {

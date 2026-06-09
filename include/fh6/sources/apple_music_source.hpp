@@ -50,6 +50,7 @@ public:
     bool consume_drain_request() noexcept override;
 
     TrackInfo current_track() const override;
+    std::optional<ArtworkImage> artwork() const override;
     PlaybackState playback_state() const noexcept override {
         return state_.load(std::memory_order_acquire);
     }
@@ -75,6 +76,8 @@ private:
     void render_monitor_locked(const int16_t* samples, std::size_t frames) noexcept;
     void append_frames(const void* data, uint32_t frames, uint32_t flags, RingBuffer& ring);
     void refresh_track_locked(bool force = false);
+    void refresh_artwork_locked(const std::string& key);
+    void flush_capture_packets_locked() noexcept;
 
     AppleMusicConfig cfg_;
 
@@ -105,6 +108,8 @@ private:
     uint32_t metadata_refresh_ticks_ = 0;
     std::chrono::steady_clock::time_point ignore_silent_capture_until_{};
     TrackInfo cached_track_;
+    ArtworkImage cached_art_;
+    std::string cached_art_key_;
 
     struct MutedSession;
     std::vector<MutedSession> muted_sessions_;
