@@ -263,9 +263,7 @@ end;
 
 function DetectExistingInstall(GameDir: String): Boolean;
 begin
-  Result :=
-    DirExists(ExpandConstant('{localappdata}\Programs\FH6 Universal Radio')) or
-    HasInstalledFiles(GameDir);
+  Result := HasInstalledFiles(GameDir);
 end;
 
 procedure InitializeWizard();
@@ -289,7 +287,7 @@ end;
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
-  if ExistingInstall and
+  if ExistingInstall and (DetectedGameDir <> '') and
      ((Assigned(GameDirPage) and (PageID = GameDirPage.ID)) or
       (PageID = wpSelectDir) or
       (PageID = wpSelectTasks) or

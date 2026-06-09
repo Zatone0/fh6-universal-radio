@@ -74,6 +74,9 @@ if (-not (Test-Path (Join-Path $gameDir "forzahorizon6.exe"))) {
 if (Get-Process -Name "forzahorizon6" -ErrorAction SilentlyContinue) {
     throw "FH6 is running. Close the game before installing or updating the DLL."
 }
+if ($NoCompanion -and $InstallVBCable) {
+    throw "-InstallVBCable requires the companion app files. Remove -NoCompanion or run Install-VBCable.ps1 separately."
+}
 if (-not (Test-Path (Join-Path $packageRoot "version.dll"))) {
     throw "version.dll not found next to this installer."
 }

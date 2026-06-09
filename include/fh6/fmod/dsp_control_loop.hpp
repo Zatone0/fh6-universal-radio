@@ -15,6 +15,10 @@
 #include <stop_token>
 #include <thread>
 
+namespace fh6 {
+class IAudioSource;
+} // namespace fh6
+
 namespace fh6::fmod_bridge {
 
 class ControlLoop {
@@ -76,6 +80,7 @@ private:
 
     bool prev_r10_          = false;
     bool have_prev_r10_     = false;
+    IAudioSource* active_source_ = nullptr;
     bool prev_radio_active_ = false;
     bool have_prev_radio_active_ = false;
     bool prev_dsp_active_ = false;

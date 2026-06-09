@@ -29,7 +29,11 @@ Write-Host "Uninstalling FH6 Universal Radio" -ForegroundColor Cyan
 Get-Process -Name "fh6-radio-companion" -ErrorAction SilentlyContinue | Stop-Process -Force
 
 $dll = Join-Path $gameDir "version.dll"
-if (Test-Path $dll) {
+$dllBak = "$dll.bak"
+if (Test-Path $dllBak) {
+    Move-Item -Path $dllBak -Destination $dll -Force
+    Write-Host "  = version.dll restored from backup"
+} elseif (Test-Path $dll) {
     Remove-Item $dll -Force
     Write-Host "  - version.dll"
 }

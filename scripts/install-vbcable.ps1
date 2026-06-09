@@ -42,8 +42,16 @@ if (-not $setup) {
     throw "Could not find the VB-CABLE setup executable after extracting $ZipPath"
 }
 
+$sig = Get-AuthenticodeSignature -FilePath $setup.FullName
+if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "VB-Audio|Vincent Burel") {
+    throw "Refusing to run unsigned/untrusted VB-CABLE setup: $($setup.FullName)"
+}
+
 Write-Host "Launching VB-CABLE setup from VB-Audio." -ForegroundColor Cyan
 Write-Host "Choose Install Driver in the VB-CABLE window, then reboot Windows when prompted."
-Start-Process -FilePath $setup.FullName -Verb RunAs -Wait
+$proc = Start-Process -FilePath $setup.FullName -Verb RunAs -Wait -PassThru
+if ($proc.ExitCode -ne 0) {
+    throw "VB-CABLE setup exited with code $($proc.ExitCode)"
+}
 
 Write-Host "VB-CABLE setup closed. Reboot Windows if the installer requested it." -ForegroundColor Green

@@ -312,7 +312,12 @@ void apply_patch(Config& c, const json& j) {
             pull(*it, "transport_controls", c.apple_music.transport_controls);
         c.apple_music.mute_external_output =
             pull(*it, "mute_external_output", c.apple_music.mute_external_output);
-        c.apple_music.capture_mode = pull(*it, "capture_mode", c.apple_music.capture_mode);
+        auto mode = pull<std::string>(*it, "capture_mode", c.apple_music.capture_mode);
+        if (mode == "auto" || mode == "process_loopback" || mode == "device") {
+            c.apple_music.capture_mode = std::move(mode);
+        } else {
+            log::warn("[http] ignoring invalid apple_music.capture_mode '{}'", mode);
+        }
         c.apple_music.capture_device =
             pull(*it, "capture_device", c.apple_music.capture_device);
         c.apple_music.monitor_when_radio_inactive =

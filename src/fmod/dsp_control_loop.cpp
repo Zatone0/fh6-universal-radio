@@ -269,6 +269,7 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
         raw_transport_active_ = false;
         have_raw_transport_active_ = false;
         prev_raw_transport_flip_ = {};
+        active_source_ = nullptr;
         bridge_.set_radio_active(false);
         quick_skip_armed_ = false;
         return;
@@ -291,8 +292,15 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
         now - last_retarget_ <= kRetargetTransportGrace;
     const bool dsp_active = r10 && (!mixer_known || mixer_consuming_ || retarget_settling);
     auto& ring     = bridge_.manager().ring();
+    const bool source_changed = active != active_source_;
+    if (source_changed) {
+        active_source_ = active;
+        have_transport_active_ = false;
+        have_raw_transport_active_ = false;
+        prev_raw_transport_flip_ = {};
+    }
 
-    if (!have_prev_dsp_active_) {
+    if (!have_prev_dsp_active_ || source_changed) {
         have_prev_dsp_active_ = true;
         prev_dsp_active_ = dsp_active;
         meta_.reset_cache();

@@ -11,13 +11,24 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $dist = Join-Path $root "dist"
 $out = Join-Path $root $OutDir
+$rootFull = [System.IO.Path]::GetFullPath($root)
+$outFull = [System.IO.Path]::GetFullPath($out)
+$driveRoot = [System.IO.Path]::GetPathRoot($outFull)
+
+if ([string]::IsNullOrWhiteSpace($OutDir) -or
+    $outFull -eq $rootFull -or
+    $outFull -eq $driveRoot -or
+    -not $outFull.StartsWith($rootFull + [System.IO.Path]::DirectorySeparatorChar,
+        [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to stage package into unsafe OutDir: '$OutDir'"
+}
 
 if (-not (Test-Path (Join-Path $dist "version.dll"))) {
     throw "dist\version.dll not found -- run scripts\build.ps1 first."
 }
 
-if (Test-Path $out) { Remove-Item -Recurse -Force $out }
-New-Item -ItemType Directory -Force -Path $out | Out-Null
+if (Test-Path $outFull) { Remove-Item -Recurse -Force -LiteralPath $outFull }
+New-Item -ItemType Directory -Force -Path $outFull | Out-Null
 
 Copy-Item (Join-Path $dist "version.dll") $out
 if (Test-Path (Join-Path $dist "fh6-radio-companion.exe")) {
