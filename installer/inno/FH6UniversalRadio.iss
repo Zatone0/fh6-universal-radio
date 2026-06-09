@@ -292,7 +292,8 @@ begin
   if ExistingInstall and
      ((Assigned(GameDirPage) and (PageID = GameDirPage.ID)) or
       (PageID = wpSelectDir) or
-      (PageID = wpSelectTasks)) then
+      (PageID = wpSelectTasks) or
+      (PageID = wpInfoAfter)) then
     Result := True;
 end;
 

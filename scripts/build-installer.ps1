@@ -1,5 +1,6 @@
 param(
-    [string] $GameDir = "E:\SteamLibrary\steamapps\common\ForzaHorizon6"
+    [string] $GameDir = "E:\SteamLibrary\steamapps\common\ForzaHorizon6",
+    [switch] $SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,6 +28,10 @@ Install Inno Setup 6, then re-run:
 With winget:
   winget install JRSoftware.InnoSetup
 "@
+}
+
+if (-not $SkipBuild) {
+    & (Join-Path $PSScriptRoot "build.ps1") | Out-Host
 }
 
 & (Join-Path $PSScriptRoot "package-windows.ps1") -GameDir $GameDir | Out-Host

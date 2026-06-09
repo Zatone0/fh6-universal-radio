@@ -4,6 +4,7 @@
 
 #include <windows.h>
 #include <cstring>
+#include <algorithm>
 
 namespace fh6::fmod_bridge {
 
@@ -24,6 +25,7 @@ struct StringHeader {
 static_assert(sizeof(StringHeader) == 32);
 
 constexpr std::uint64_t kSsoCap = 15;
+constexpr std::uint64_t kMaxInjectedLen = 384;
 
 bool write_string_slot(std::byte* target, std::string_view src) noexcept {
     if (!target) return false;
@@ -35,9 +37,8 @@ bool write_string_slot(std::byte* target, std::string_view src) noexcept {
     if (hdr.cap < kSsoCap) return false; // implausible -- not an std::string
     if (hdr.size > hdr.cap) return false;
 
-    const std::uint64_t max_size = hdr.cap > kSsoCap ? hdr.cap : kSsoCap;
     const auto clipped = src.substr(0, static_cast<std::size_t>(std::min<std::uint64_t>(
-                                      static_cast<std::uint64_t>(src.size()), max_size)));
+                                      static_cast<std::uint64_t>(src.size()), kMaxInjectedLen)));
     const std::uint64_t new_size = static_cast<std::uint64_t>(clipped.size());
 
     auto inplace_overwrite_heap = [&]() -> bool {
@@ -64,8 +65,39 @@ bool write_string_slot(std::byte* target, std::string_view src) noexcept {
         return true;
     };
 
+    auto allocate_and_swap = [&]() -> bool {
+        // FH6's HUD strings are often still in MSVC's 15-byte SSO storage.
+        // To show full custom metadata, give the slot a process-local buffer
+        // with headroom and leave the old game-owned storage untouched.
+        const std::uint64_t alloc_cap = std::max<std::uint64_t>(
+            kSsoCap + 1, (new_size + 32) & ~static_cast<std::uint64_t>(15));
+        const SIZE_T bytes = static_cast<SIZE_T>(alloc_cap + 1);
+        auto* fresh = static_cast<std::byte*>(
+            HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes));
+        if (!fresh) {
+            log::warn("[meta] HeapAlloc failed for {} bytes", bytes);
+            return false;
+        }
+        std::memcpy(fresh, clipped.data(), clipped.size());
+        fresh[clipped.size()] = std::byte{0};
+
+        if (!seh_call([&] {
+                std::memcpy(target, &fresh, sizeof(fresh));
+                std::memset(target + sizeof(fresh), 0, 16 - sizeof(fresh));
+                std::memcpy(target + 16, &new_size, sizeof(new_size));
+                std::memcpy(target + 24, &alloc_cap, sizeof(alloc_cap));
+            })) {
+            HeapFree(GetProcessHeap(), 0, fresh);
+            return false;
+        }
+        log::info("[meta] expanded HUD string storage to {} bytes", alloc_cap);
+        return true;
+    };
+
     const bool is_heap = hdr.cap > kSsoCap;
-    return is_heap ? inplace_overwrite_heap() : inplace_overwrite_sso();
+    if (is_heap && new_size <= hdr.cap) return inplace_overwrite_heap();
+    if (!is_heap && new_size <= kSsoCap) return inplace_overwrite_sso();
+    return allocate_and_swap();
 }
 
 } // namespace
@@ -89,6 +121,8 @@ bool MetadataInjector::update(std::string_view title, std::string_view artist) n
 
     bool ok = true;
     if (title != last_title_) {
+        if (title.size() > kMaxInjectedLen)
+            log::warn("[meta] title clipped from {} to {} bytes", title.size(), kMaxInjectedLen);
         if (write_string_slot(body_ + kTitleOffset, title)) {
             last_title_.assign(title);
         } else {
@@ -97,6 +131,8 @@ bool MetadataInjector::update(std::string_view title, std::string_view artist) n
         }
     }
     if (artist != last_artist_) {
+        if (artist.size() > kMaxInjectedLen)
+            log::warn("[meta] artist clipped from {} to {} bytes", artist.size(), kMaxInjectedLen);
         if (write_string_slot(body_ + kArtistOffset, artist)) {
             last_artist_.assign(artist);
         } else {

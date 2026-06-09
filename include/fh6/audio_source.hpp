@@ -65,6 +65,11 @@ public:
     // Called when the user enters/leaves the custom FH6 radio station. Sources
     // with external players can use this to mirror the game's pause behavior.
     virtual void on_radio_active_changed(bool /*active*/) {}
+
+    // Called when FH6's DSP is actively consuming our PCM. This is intentionally
+    // separate from on_radio_active_changed(): external-player play/pause may be
+    // debounced, but cache/ring filling should follow the mixer immediately.
+    virtual void on_audio_sink_active_changed(bool /*active*/) {}
     virtual void on_game_foreground_changed(bool /*foreground*/) {}
 
     // Sources that control an external player can request the game-side ring

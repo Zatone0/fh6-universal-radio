@@ -15,6 +15,8 @@ struct RadioInstance {
                                    // std::string slots the game renders on the
                                    // radio HUD (SoundName/DisplayName/Artist).
     std::string sound_name;        // sample_props_body + 0x10
+    std::uint64_t title_capacity = 0;
+    std::uint64_t artist_capacity = 0;
 };
 
 struct DiscoveryResult {

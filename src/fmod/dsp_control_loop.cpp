@@ -201,32 +201,38 @@ bool ControlLoop::acquire_target() noexcept {
     }
     bridge_.set_target(*chosen, fmod_system);
     meta_.set_target(chosen->sample_props_body);
-    log::info("[ctrl] targeting RadioStreamFmod @0x{:X} SoundName=\"{}\" SystemI*=0x{:X}",
+    log::info("[ctrl] targeting RadioStreamFmod @0x{:X} SoundName=\"{}\" title_cap={} artist_cap={} SystemI*=0x{:X}",
               reinterpret_cast<uintptr_t>(chosen->radio_stream), chosen->sound_name,
-              reinterpret_cast<uintptr_t>(fmod_system));
+              chosen->title_capacity, chosen->artist_capacity, reinterpret_cast<uintptr_t>(fmod_system));
     return true;
 }
 
 const RadioInstance* ControlLoop::select_instance(const DiscoveryResult& disc) const noexcept {
-    const RadioInstance* target        = nullptr;  // preferred placeholder, any handle state
-    const RadioInstance* custom        = nullptr;  // first R9 carrier, any handle state
+    const RadioInstance* best_live     = nullptr;  // live R9 carrier with largest HUD strings
+    const RadioInstance* best_fallback = nullptr;  // same scoring, but any handle state
+    std::uint64_t best_live_score      = 0;
+    std::uint64_t best_fallback_score  = 0;
     for (auto& i : disc.instances) {
         const bool is_target = i.sound_name == kTargetSoundName;
         const bool is_custom = i.sound_name.rfind(kCustomStationPrefix, 0) == 0;
         if (!is_custom) continue;
-        // FH6 can spin up several streams sharing the placeholder name (e.g.
-        // an idle secondary mix); prefer the one whose channel is actually
-        // live so we attach to the stream that's carrying audio.
-        if (is_target && bridge_.channel_handle_alive(i.radio_stream)) return &i;
-        if (is_custom && bridge_.channel_handle_alive(i.radio_stream)) return &i;
-        if (is_target && !target) target = &i;
-        if (!custom) custom = &i;
+        const auto hud_cap = std::min(i.title_capacity, i.artist_capacity);
+        const auto score = hud_cap * 10 + (is_target ? 1 : 0);
+        const bool live = bridge_.channel_handle_alive(i.radio_stream);
+        if (live && (!best_live || score > best_live_score)) {
+            best_live = &i;
+            best_live_score = score;
+        }
+        if (!best_fallback || score > best_fallback_score) {
+            best_fallback = &i;
+            best_fallback_score = score;
+        }
     }
-    if (!target && !custom && !disc.instances.empty()) {
+    if (!best_live && !best_fallback && !disc.instances.empty()) {
         log::warn("[ctrl] found radio stream(s), but none are R9 custom carriers; rescanning");
         reset_radio_discovery_cache();
     }
-    return target ? target : custom;
+    return best_live ? best_live : best_fallback;
 }
 
 void ControlLoop::run_playback_state_machines(time_point now) noexcept {
@@ -286,12 +292,14 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
         prev_dsp_active_ = dsp_active;
         meta_.reset_cache();
         bridge_.set_radio_active(dsp_active);
+        active->on_audio_sink_active_changed(dsp_active);
         if (!dsp_active) ring.drain();
     } else if (dsp_active != prev_dsp_active_) {
         log::info("[ctrl] dsp {} (station={}, mixer={})",
                   dsp_active ? "active" : "inactive", r10, mixer_consuming_);
         meta_.reset_cache();
         bridge_.set_radio_active(dsp_active);
+        active->on_audio_sink_active_changed(dsp_active);
         ring.drain();
         prev_dsp_active_ = dsp_active;
     }

@@ -109,6 +109,11 @@ function renderSources() {
 }
 
 function renderMetadataDiagnostics() {
+  const enabled = !!cfg?.playback?.radio_diagnostics;
+  const card = $("#radio-diagnostics-card");
+  if (card) card.hidden = !enabled;
+  if (!enabled) return;
+
   const meta = state?.metadata || {};
   const write = meta.updates ? (meta.last_write_ok ? "ok" : "failed") : "waiting";
   setText($("#meta-write"), write);
@@ -128,6 +133,7 @@ function renderOutput() {
 }
 
 const EQ_BAND_LABELS = ["60 Hz", "250 Hz", "1 kHz", "4 kHz", "12 kHz"];
+const SOURCE_SECTIONS = new Set(["local_files", "youtube_music", "apple_music", "jellyfin"]);
 
 const SCHEMA = [
   ["general", "General", [
@@ -152,11 +158,10 @@ const SCHEMA = [
   ]],
   ["apple_music", "Apple Music", [
     ["enabled",            "Enabled",            "checkbox"],
-    ["transport_controls", "Transport controls", "checkbox"],
-    ["mute_external_output", "Mute external output", "checkbox"],
+    ["transport_controls", "Control playback",   "checkbox"],
     ["capture_mode",       "Capture mode",       "select", ["auto", "process_loopback", "device"]],
     ["capture_device",     "Capture device",     "text"],
-    ["monitor_when_radio_inactive", "Monitor off-radio", "checkbox"],
+    ["monitor_when_radio_inactive", "Monitor cable outside FH6", "checkbox"],
   ]],
   ["jellyfin", "Jellyfin", [
     ["enabled",          "Enabled",          "checkbox"],
@@ -184,9 +189,12 @@ const SCHEMA = [
 
 function field(section, [key, label, type, a, b, c]) {
   const id  = `f-${section}-${key}`;
-  const cur = cfg?.[section]?.[key];
+  let cur = cfg?.[section]?.[key];
+  if (section === "audio" && key === "output_gain" && typeof cur === "number") {
+    cur = Math.round(cur * 100) / 100;
+  }
   if (type === "checkbox") {
-    return `<div class="field checkbox">
+    return `<div class="field checkbox" data-field-key="${key}">
       <input type="checkbox" id="${id}" data-section="${section}" data-key="${key}" ${cur ? "checked" : ""}>
       <label for="${id}">${label}</label>
     </div>`;
@@ -194,7 +202,7 @@ function field(section, [key, label, type, a, b, c]) {
   if (type === "select") {
     const opts = (a || []).map(v =>
       `<option value="${v}" ${cur === v ? "selected" : ""}>${v}</option>`).join("");
-    return `<div class="field">
+    return `<div class="field" data-field-key="${key}">
       <label for="${id}">${label}</label>
       <select id="${id}" data-section="${section}" data-key="${key}">${opts}</select>
     </div>`;
@@ -208,27 +216,50 @@ function field(section, [key, label, type, a, b, c]) {
                data-section="${section}" data-key="${key}" data-index="${i}">
         <output>${(vals[i] ?? 0).toFixed(1)} dB</output>
       </div>`).join("");
-    return `<div class="field bands"><label>${label}</label>${rows}</div>`;
+    return `<div class="field bands" data-field-key="${key}"><label>${label}</label>${rows}</div>`;
   }
   const attrs = type === "number"
     ? ` min="${a ?? ''}" max="${b ?? ''}" step="${c ?? 1}"`
     : "";
-  return `<div class="field">
+  return `<div class="field" data-field-key="${key}">
     <label for="${id}">${label}</label>
     <input id="${id}" type="${type}" data-section="${section}" data-key="${key}"${attrs} value="${cur ?? ''}">
   </div>`;
 }
 
+function updateSourceSettingsVisibility(form = $("#settings-form")) {
+  for (const section of SOURCE_SECTIONS) {
+    const enabled = $(`[data-section="${section}"][data-key="enabled"]`, form);
+    if (!enabled) continue;
+    const fieldset = enabled.closest("fieldset");
+    if (!fieldset) continue;
+    $$("[data-field-key]", fieldset).forEach(row => {
+      if (row.dataset.fieldKey !== "enabled") row.hidden = !enabled.checked;
+    });
+  }
+}
+
 function renderSettings() {
   const form = $("#settings-form");
-  form.innerHTML = SCHEMA.map(([sec, title, fields]) =>
-    `<fieldset><legend>${title}</legend>${fields.map(f => field(sec, f)).join("")}</fieldset>`
-  ).join("");
+  form.innerHTML = SCHEMA.map(([sec, title, fields]) => {
+    const visibleFields = SOURCE_SECTIONS.has(sec) && !cfg?.[sec]?.enabled
+      ? fields.filter(([key]) => key === "enabled")
+      : fields;
+    return `<fieldset><legend>${title}</legend>${visibleFields.map(f => field(sec, f)).join("")}</fieldset>`;
+  }).join("");
   // Live "X.X dB" readout next to each EQ slider.
   $$(".field.bands input[type='range']", form).forEach(r => {
     const out = r.nextElementSibling;
     r.addEventListener("input", () => { out.textContent = `${parseFloat(r.value).toFixed(1)} dB`; });
   });
+  for (const section of SOURCE_SECTIONS) {
+    const enabled = $(`[data-section="${section}"][data-key="enabled"]`, form);
+    enabled?.addEventListener("change", () => {
+      cfg[section].enabled = enabled.checked;
+      renderSettings();
+    });
+  }
+  updateSourceSettingsVisibility(form);
 }
 
 function collectSettings() {
@@ -327,6 +358,7 @@ function wire() {
   $("#save-config").onclick    = async () => {
     try {
       cfg = await api.send("/api/config", collectSettings(), "PUT");
+      renderMetadataDiagnostics();
       toast("Saved");
       closeDrawer();
     } catch (e) { toast(e.message, true); }
@@ -334,6 +366,7 @@ function wire() {
   $("#reload-config").onclick  = async () => {
     cfg = await api.send("/api/config/reload");
     renderSettings();
+    renderMetadataDiagnostics();
     toast("Reloaded from disk");
   };
 }
@@ -368,4 +401,7 @@ function render() {
 }
 
 wire();
+api.get("/api/config")
+  .then(c => { cfg = c; renderMetadataDiagnostics(); })
+  .catch(() => {});
 connect();

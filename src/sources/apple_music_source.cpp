@@ -33,27 +33,46 @@ namespace fh6::sources {
 namespace {
 
 namespace media = winrt::Windows::Media::Control;
+using namespace std::chrono_literals;
 
 constexpr uint32_t kOutRate = 48000;
 constexpr uint32_t kOutChannels = 2;
 constexpr uint32_t kFrameBytes = kOutChannels * sizeof(int16_t);
 constexpr uint64_t kPcmBytesPerSec = uint64_t{kOutRate} * kFrameBytes;
 
-void normalize_artist_album(std::string& artist, std::string& album) {
-    constexpr std::string_view kSep = " — ";
-    auto pos = artist.find(kSep);
-    if (pos == std::string::npos) return;
-
-    auto trailing = artist.substr(pos + kSep.size());
-    if (trailing.empty()) return;
-    if (album.empty()) {
-        album = std::move(trailing);
-    } else if (album != trailing) {
+void normalize_artist_album(std::string& artist, std::string& album, bool keep_album) {
+    constexpr std::array<std::string_view, 3> kSeparators = {
+        " \xE2\x80\x94 ", // em dash
+        " \xE2\x80\x93 ", // en dash
+        " - "
+    };
+    std::size_t pos = std::string::npos;
+    std::size_t sep_len = 0;
+    for (auto sep : kSeparators) {
+        pos = artist.find(sep);
+        if (pos != std::string::npos) {
+            sep_len = sep.size();
+            break;
+        }
+    }
+    if (pos == std::string::npos) {
+        if (!keep_album) album.clear();
         return;
+    }
+
+    auto trailing = artist.substr(pos + sep_len);
+    if (trailing.empty()) return;
+    if (keep_album) {
+        if (album.empty()) {
+            album = std::move(trailing);
+        } else if (album != trailing) {
+            return;
+        }
+    } else {
+        album.clear();
     }
     artist.erase(pos);
 }
-
 template <class T> void release_com(T*& p) noexcept {
     if (p) {
         p->Release();
@@ -596,7 +615,7 @@ void AppleMusicSource::reclaim_monitor_blocks_locked() noexcept {
 }
 
 void AppleMusicSource::render_monitor_locked(const int16_t* samples, std::size_t frames) noexcept {
-    if (!samples || frames == 0 || radio_active_ || game_foreground_ ||
+    if (!samples || frames == 0 || audio_sink_active_ || game_foreground_ ||
         !cfg_.monitor_when_radio_inactive || !using_device_capture_)
         return;
     if (!ensure_monitor_locked()) return;
@@ -911,6 +930,7 @@ void AppleMusicSource::append_frames(const void* data, uint32_t frames, uint32_t
     const auto in_channels = std::max<uint16_t>(1, mix_format_->nChannels);
     const auto block_align = std::max<uint16_t>(1, mix_format_->nBlockAlign);
     const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+    if (silent && std::chrono::steady_clock::now() < ignore_silent_capture_until_) return;
 
     scratch_.clear();
     scratch_.reserve(size_t{frames} * kOutChannels);
@@ -937,7 +957,7 @@ void AppleMusicSource::append_frames(const void* data, uint32_t frames, uint32_t
     const auto out_frames = scratch_.size() / kOutChannels;
     eq_.process(scratch_.data(), out_frames);
     render_monitor_locked(scratch_.data(), out_frames);
-    if (!radio_active_) return;
+    if (!audio_sink_active_) return;
 
     const auto bytes_total = out_frames * kFrameBytes;
     if (ring.write(scratch_.data(), bytes_total) == bytes_total) {
@@ -996,7 +1016,7 @@ void AppleMusicSource::refresh_track_locked(bool force) {
             auto title = narrow(props.Title());
             auto artist = narrow(props.Artist());
             auto album = narrow(props.AlbumTitle());
-            normalize_artist_album(artist, album);
+            normalize_artist_album(artist, album, show_album_in_hud_);
             if (!title.empty()) next.title = std::move(title);
             if (!artist.empty()) next.artist = std::move(artist);
             if (!album.empty()) next.album = std::move(album);
@@ -1027,6 +1047,12 @@ void AppleMusicSource::set_config(AppleMusicConfig cfg) {
 }
 
 void AppleMusicSource::set_playback_options(const PlaybackConfig& opts) {
+    std::scoped_lock lk{mu_};
+    if (show_album_in_hud_ != opts.show_album_in_hud) {
+        show_album_in_hud_ = opts.show_album_in_hud;
+        last_track_key_.clear();
+        metadata_refresh_ticks_ = 25;
+    }
     eq_.set_options(opts.equalizer_enabled, opts.equalizer_bands, static_cast<float>(kOutRate));
 }
 
@@ -1056,6 +1082,21 @@ void AppleMusicSource::on_radio_active_changed(bool active) {
         return;
     }
 
+    if (state_.load(std::memory_order_acquire) == PlaybackState::playing) {
+        if (!send_session_command_locked(MediaCommand::pause)) send_media_key(VK_MEDIA_PLAY_PAUSE);
+        state_.store(PlaybackState::paused, std::memory_order_release);
+        paused_by_radio_ = true;
+    }
+}
+
+void AppleMusicSource::on_audio_sink_active_changed(bool active) {
+    std::scoped_lock lk{mu_};
+    audio_sink_active_ = active;
+    ignore_silent_capture_until_ = std::chrono::steady_clock::now() + 750ms;
+    if (active) {
+        close_monitor_locked();
+        return;
+    }
     if (state_.load(std::memory_order_acquire) == PlaybackState::playing) {
         if (!send_session_command_locked(MediaCommand::pause)) send_media_key(VK_MEDIA_PLAY_PAUSE);
         state_.store(PlaybackState::paused, std::memory_order_release);

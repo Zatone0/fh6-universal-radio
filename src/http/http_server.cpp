@@ -18,6 +18,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -29,6 +30,10 @@ namespace fh6::http {
 using json = nlohmann::json;
 
 namespace {
+
+double round2(double v) noexcept {
+    return std::round(v * 100.0) / 100.0;
+}
 
 constexpr const char* state_string(PlaybackState s) noexcept {
     switch (s) {
@@ -144,9 +149,9 @@ json config_to_json(const Config& c) {
              {"default_playlist", c.jellyfin.default_playlist},
              {"shuffle", c.jellyfin.shuffle},
          }},
-        {"audio",
+             {"audio",
          json{
-             {"output_gain", c.audio.output_gain},
+             {"output_gain", round2(c.audio.output_gain)},
          }},
         {"playback",
          json{
@@ -345,6 +350,7 @@ void send_response(SOCKET client, int code, std::string_view body,
     resp << "HTTP/1.1 " << code << ' ' << status_text(code) << "\r\n"
          << "Content-Type: " << content_type << "\r\n"
          << "Content-Length: " << body.size() << "\r\n"
+         << "Cache-Control: no-store\r\n"
          << "Access-Control-Allow-Origin: *\r\n"
          << "Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\n"
          << "Access-Control-Allow-Headers: Content-Type\r\n"
@@ -388,6 +394,7 @@ struct HttpServer::Impl {
     json build_state() const {
         auto* a      = mgr.active();
         auto meta    = bridge.metadata_status();
+        const auto cfg = store.snapshot();
         json sources = json::array();
         for (auto* s : mgr.sources_snapshot()) sources.push_back(source_to_json(s));
         return json{
@@ -396,7 +403,7 @@ struct HttpServer::Impl {
              json{
                  {"active", bridge.mode() == fmod_bridge::DSPMode::pcm},
                  {"native_dsp_mode", mode_string(bridge.mode())},
-                 {"output_gain", bridge.gain()},
+                 {"output_gain", round2(cfg.audio.output_gain)},
                  {"underruns", bridge.underruns()},
                  {"calls", bridge.call_count()},
                  {"buffer_len", bridge.last_buffer_len()},
@@ -483,8 +490,10 @@ struct HttpServer::Impl {
 
             SOCKET client = accept(srv_sock, nullptr, nullptr);
             if (client == INVALID_SOCKET) continue;
-            handle(client);
-            closesocket(client);
+            std::thread{[this, client] {
+                handle(client);
+                closesocket(client);
+            }}.detach();
         }
 
         WSACleanup();
@@ -592,6 +601,7 @@ struct HttpServer::Impl {
             auto j = json::parse(req.body);
             if (auto it = j.find("output_gain"); it != j.end()) {
                 float g = std::clamp(it->get<float>(), 0.0f, 1.0f);
+                g = std::round(g * 100.0f) / 100.0f;
                 bridge.set_gain(g);
                 store.patch([&](Config& c) { c.audio.output_gain = g; });
             }

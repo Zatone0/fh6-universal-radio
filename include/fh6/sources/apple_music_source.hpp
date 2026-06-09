@@ -5,6 +5,7 @@
 #include "fh6/playback_dsp.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -44,6 +45,7 @@ public:
     void set_config(AppleMusicConfig cfg);
     void set_playback_options(const PlaybackConfig& opts) override;
     void on_radio_active_changed(bool active) override;
+    void on_audio_sink_active_changed(bool active) override;
     void on_game_foreground_changed(bool foreground) override;
     bool consume_drain_request() noexcept override;
 
@@ -86,7 +88,9 @@ private:
     bool capture_started_ = false;
     bool using_device_capture_ = false;
     bool radio_active_ = false;
+    bool audio_sink_active_ = false;
     bool game_foreground_ = true;
+    bool show_album_in_hud_ = true;
     void* monitor_wave_out_ = nullptr;
     struct MonitorBlock;
     std::vector<std::unique_ptr<MonitorBlock>> monitor_blocks_;
@@ -99,6 +103,7 @@ private:
     std::string last_track_key_;
     uint32_t mute_refresh_ticks_ = 0;
     uint32_t metadata_refresh_ticks_ = 0;
+    std::chrono::steady_clock::time_point ignore_silent_capture_until_{};
     TrackInfo cached_track_;
 
     struct MutedSession;
