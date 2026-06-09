@@ -7,6 +7,7 @@
 namespace fh6 {
 class AudioSourceManager;
 class ConfigStore;
+class DependencyManager;
 namespace fmod_bridge {
 class DSPBridge;
 } // namespace fmod_bridge
@@ -25,8 +26,15 @@ namespace fh6::http {
 //   POST /api/source/<name>/{play,pause,stop,next,previous}
 //
 //   POST /api/source/youtube_music/cast   body {"url":"..."}
-//   POST /api/source/local_files/rescan   body {"music_dir":"...","recursive":bool}
-//   GET  /api/source/local_files/playlist
+//
+//   POST /api/fs/browse                   body {"path":"..."}; "" => drive list
+//   GET  /api/source/local_files/stations stations + active_station + track_count
+//   PUT  /api/source/local_files/stations body {"stations":[...],"active_station":"..."}
+//   POST /api/source/local_files/activate body {"name":"..."} (switch source + play)
+//   GET  /api/source/local_files/queue    {"cursor":N,"tracks":[{index,title,folder}]}
+//   POST /api/source/local_files/play     body {"index":N}
+//   POST /api/source/local_files/reshuffle
+//   POST /api/source/local_files/rescan   re-scan the active station
 //
 //   GET  /api/config                      full config.toml as JSON
 //   PUT  /api/config                      deep-patch config; writes file + notifies
@@ -34,11 +42,14 @@ namespace fh6::http {
 //
 //   POST /api/options                     fast-path knobs: output_gain, dsp_mode
 //
+//   GET  /api/deps                        binary download status
+//   POST /api/deps/refresh                retry any failed/missing downloads
+//
 //   GET  /                                bundled dashboard (vanilla SPA)
 class HttpServer {
 public:
     HttpServer(AudioSourceManager& mgr, fmod_bridge::DSPBridge& bridge, ConfigStore& cfg,
-               uint16_t port, std::filesystem::path ui_dist);
+               uint16_t port, std::filesystem::path ui_dist, DependencyManager& deps);
     ~HttpServer();
 
     HttpServer(const HttpServer&)            = delete;

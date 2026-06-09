@@ -3,6 +3,7 @@
 #include "fh6/ring_buffer.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace fh6 {
@@ -16,6 +17,13 @@ struct TrackInfo {
     std::string artwork_url;
     uint64_t duration_ms = 0;
     uint64_t position_ms = 0;
+};
+
+// Local cover bytes (embedded tag, OS thumbnail) served at GET /api/artwork
+// when the art isn't a browser-reachable URL.
+struct ArtworkImage {
+    std::string mime;
+    std::string bytes;
 };
 
 enum class PlaybackState { stopped, playing, paused, buffering };
@@ -62,8 +70,13 @@ public:
     // EQ band/enable updates land here. No-op for sources that don't care.
     virtual void set_playback_options(const PlaybackConfig& /*opts*/) {}
 
-    // Called when the user enters/leaves the custom FH6 radio station. Sources
-    // with external players can use this to mirror the game's pause behavior.
+    // The game stopped (pause menu, radio off) or resumed draining our station.
+    // Sources wrapping a live external player mirror this onto that player's
+    // transport; pull-based sources need nothing -- they pause by not being read.
+    virtual void on_radio_audible(bool audible) { on_radio_active_changed(audible); }
+
+    // Legacy Apple Music hook kept separate from the upstream audible callback
+    // so the control loop can debounce transport without delaying cache state.
     virtual void on_radio_active_changed(bool /*active*/) {}
 
     // Called when FH6's DSP is actively consuming our PCM. This is intentionally
@@ -76,7 +89,11 @@ public:
     // be drained after a skip/seek/restart so metadata and audio realign.
     virtual bool consume_drain_request() noexcept { return false; }
 
-    virtual TrackInfo current_track() const               = 0;
+    virtual TrackInfo current_track() const = 0;
+
+    // Local cover bytes for the current track; empty for URL-based sources.
+    virtual std::optional<ArtworkImage> artwork() const { return std::nullopt; }
+
     virtual PlaybackState playback_state() const noexcept = 0;
     virtual AuthState auth_state() const noexcept         = 0;
     virtual std::string auth_instructions() const { return {}; }

@@ -1,7 +1,6 @@
 #include "fh6/playback_dsp.hpp"
 
 #include <cctype>
-#include <cstring>
 #include <fstream>
 #include <limits>
 #include <string>
@@ -13,17 +12,10 @@ namespace fh6 {
 namespace {
 
 // Reference taggers (foobar2000, mp3gain, etc.) write the gain with a "dB"
-// suffix and the peak as a plain float. Vorbis comment values are UTF-8 ASCII
-// in practice; ID3v2 TXXX descriptors share the same syntax.
-float parse_gain_db(std::string_view s) noexcept {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
-    try {
-        return std::stof(std::string{s});
-    } catch (...) {
-        return std::numeric_limits<float>::quiet_NaN();
-    }
-}
-float parse_peak(std::string_view s) noexcept {
+// suffix and the peak as a plain float; std::stof parses the leading number of
+// both. Vorbis comment values are UTF-8 ASCII in practice; ID3v2 TXXX
+// descriptors share the same syntax.
+float parse_rg_float(std::string_view s) noexcept {
     while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
     try {
         return std::stof(std::string{s});
@@ -42,7 +34,10 @@ std::size_t find_ci(std::string_view hay, std::string_view needle, std::size_t p
     for (std::size_t i = pos; i + needle.size() <= hay.size(); ++i) {
         bool match = true;
         for (std::size_t k = 0; k < needle.size(); ++k) {
-            if (!ieq(hay[i + k], needle[k])) { match = false; break; }
+            if (!ieq(hay[i + k], needle[k])) {
+                match = false;
+                break;
+            }
         }
         if (match) return i;
     }
@@ -75,14 +70,13 @@ void parse_replaygain_file(const std::filesystem::path& path, float& out_gain_db
     if (n < 16) return;
     std::string_view sv{buf.data(), n};
 
+    // extract_value matches case-insensitively (find_ci), so the uppercase
+    // keys also catch lowercase Vorbis-comment spellings.
     auto gain = extract_value(sv, "REPLAYGAIN_TRACK_GAIN");
     auto peak = extract_value(sv, "REPLAYGAIN_TRACK_PEAK");
 
-    if (gain.empty()) gain = extract_value(sv, "replaygain_track_gain");
-    if (peak.empty()) peak = extract_value(sv, "replaygain_track_peak");
-
-    if (!gain.empty()) out_gain_db = parse_gain_db(gain);
-    if (!peak.empty()) out_peak_lin = parse_peak(peak);
+    if (!gain.empty()) out_gain_db = parse_rg_float(gain);
+    if (!peak.empty()) out_peak_lin = parse_rg_float(peak);
 }
 
 } // namespace fh6

@@ -3,14 +3,18 @@ FH6 Universal Radio
 
 Thanks for grabbing this. It's a free, open-source mod that drops a
 brand new station into Forza Horizon 6's radio dial. You feed it audio
-from a folder of music files on your PC, from any YouTube / YouTube
-Music link, or from a Jellyfin server, and the game treats the result
+from a folder of music files on your PC, from online radio stations, from
+Spotify, from any YouTube / YouTube Music link, from a Jellyfin server, or
+from any other Windows app (Deezer, a browser tab...), and the game treats the result
 like every other station: it ducks for menus, follows your in-game
 volume slider, and fades on the loading screen.
 
 
 Getting it running
 ~~~~~~~~~~~~~~~~~~
+
+Prefer a video? Watch the installation guide on YouTube:
+https://www.youtube.com/watch?v=9Uwy3pDf4SQ
 
 Make sure FH6 isn't open first. Then drop the contents of this archive
 straight into the folder that contains forzahorizon6.exe. Depending on
@@ -40,7 +44,7 @@ Flip to another station and it stops broadcasting.
 Configuring it from your browser
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Everything else is driven from a small web dashboard the mod hosts
+Everything else is driven from a web dashboard the mod hosts
 locally. With the game running, open this URL in any browser on the
 same machine:
 
@@ -52,24 +56,19 @@ Prompt to find it.
 
 From there:
 
-  * Local files: give it a folder full of MP3, FLAC, WAV, OGG, M4A,
-    AAC, OPUS or WMA tracks. Subfolders are scanned too. Shuffle,
-    skip, and volume controls are all in the UI. MP3 / FLAC / WAV /
-    OGG play out of the box; the other formats route through ffmpeg
-    (same binary as YouTube Music below).
+  * Local files: build "stations" from one or more folders of MP3, FLAC,
+    WAV, OGG, M4A, AAC, OPUS, M3U, M3U8 or WMA tracks. Subfolders are
+    scanned too, and you can uncheck the ones you don't want. Pick a play
+    order (shuffle / albums / name / folder), a repeat mode, and browse or
+    search the queue.
+
+  * Online radio: search a built-in directory of thousands of internet
+    stations by name, genre, or country and tune one in a click, or paste
+    a direct stream URL. Save favourites with their logos; the dashboard
+    also keeps a "recently played" list.
 
   * YouTube Music: paste a video URL, a playlist, or a YT Music
-    link. This path needs three external tools. Open a Command
-    Prompt and run:
-
-        winget install yt-dlp.yt-dlp
-        winget install Gyan.FFmpeg
-        winget install DenoLand.Deno
-
-    Then restart the game. yt-dlp and ffmpeg can also be pointed
-    at explicitly from Settings > YouTube Music (yt-dlp)
-    and Settings > General > ffmpeg path in the dashboard
-    if you prefer a manual install.
+    link.
 
     For age-gated or private content, export your browser's cookies
     as a Netscape cookies.txt (use an extension like "Get cookies.txt
@@ -77,8 +76,19 @@ From there:
 
   * Jellyfin: stream playlists from your own Jellyfin server.
     Configure the server URL, API key, user ID, and playlist ID
-    under Settings > Jellyfin. Jellyfin transcodes to PCM via
-    ffmpeg, so the configured ffmpeg path must be valid.
+    under Settings > Jellyfin.
+
+  * External audio: capture any Windows playback device and pipe a
+    live app (Deezer, a browser tab...) into the radio. The capture
+    is a loopback of whatever the device plays, so route the app to a
+    virtual audio cable (e.g. VB-Audio Virtual Cable, set to 48000 Hz)
+    and pick that cable as the capture device, otherwise you hear the
+    app directly instead of through the radio.
+
+  * Spotify Connect: enable Spotify under Settings, then pick
+    "FH6 Universal Radio" from the Devices list in your phone's or
+    desktop's Spotify app to stream to the game. An old Spotify
+    Premium account is required by Spotify Connect.
 
 A handful of in-game extras live under Settings in the dashboard:
 
@@ -90,8 +100,6 @@ A handful of in-game extras live under Settings in the dashboard:
   * 5-band equalizer (60 Hz / 250 Hz / 1 kHz / 4 kHz / 12 kHz peaking
     biquads, +/-6 dB per band, applied producer-side at 48 kHz before
     audio hits the game).
-
-Edits save the moment you change them, no need to bounce the game.
 
 
 Pulling it back out

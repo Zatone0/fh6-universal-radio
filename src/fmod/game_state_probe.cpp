@@ -30,26 +30,27 @@ constexpr const char* kSetStationPattern =
 constexpr const char* kStationOff = "StationOff";
 
 // Offsets within *radio_state.
-constexpr std::ptrdiff_t kRaceRunningA   = 0x68;
-constexpr std::ptrdiff_t kRaceRunningB   = 0x69;
-constexpr std::ptrdiff_t kRaceRestartDw  = 0x80;
+constexpr std::ptrdiff_t kRaceRunningA  = 0x68;
+constexpr std::ptrdiff_t kRaceRunningB  = 0x69;
+constexpr std::ptrdiff_t kRaceRestartDw = 0x80;
 
 constexpr std::ptrdiff_t kStationChain1Off = 0x40;
 constexpr std::ptrdiff_t kStationChain2Off = 0x50;
 constexpr std::ptrdiff_t kStationNameOff   = 0x200;
-constexpr const char* kTargetStation1 = "Streamer Mode";
-constexpr const char* kTargetStation2 = "Universal Radio";
+constexpr const char* kTargetStation1      = "Streamer Mode";
+constexpr const char* kTargetStation2      = "Universal Radio";
 
 } // namespace
 
 GameStateProbe::GameStateProbe(const PEImage& img) noexcept {
     set_station_fn_ = reinterpret_cast<SetStationFn>(find_by_pattern(img, kSetStationPattern));
-    if (set_station_fn_)
+    if (set_station_fn_) {
         log::info("[gstate] station setter @ RVA 0x{:X}",
                   static_cast<uint32_t>(reinterpret_cast<std::byte*>(set_station_fn_) - img.base));
-    else
+    } else {
         log::warn("[gstate] station setter pattern not found -- "
                   "stall recovery (radio off/on) will be unavailable");
+    }
 
     std::byte* match = find_by_pattern(img, kProloguePattern);
     if (!match) {
@@ -82,11 +83,9 @@ GameStateProbe::Snapshot GameStateProbe::read() const noexcept {
 
     uint8_t a = 0, b = 0;
     int32_t restart = 0;
-    if (safe_read(radio_state + kRaceRunningA, a) &&
-        safe_read(radio_state + kRaceRunningB, b))
+    if (safe_read(radio_state + kRaceRunningA, a) && safe_read(radio_state + kRaceRunningB, b))
         out.race_active = a != 0 && b != 0;
-    if (safe_read(radio_state + kRaceRestartDw, restart))
-        out.race_restart = restart == -1;
+    if (safe_read(radio_state + kRaceRestartDw, restart)) out.race_restart = restart == -1;
 
     // Walk to the station-name std::string. Every link can be re-allocated
     // by FH6 (world load, scene swap) so we deref through each step.

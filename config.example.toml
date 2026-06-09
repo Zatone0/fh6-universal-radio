@@ -3,37 +3,46 @@
 # if you prefer hand edits. Windows paths should use TOML literal strings
 # (single quotes) so backslashes pass through verbatim:
 #
-#   music_dir = 'C:\Users\you\Music'
+#   roots = ['C:\Users\you\Music']
 
 [general]
 port              = 8420
 ring_buffer_mb    = 4
-default_source    = "local_files"     # local_files | youtube_music | apple_music | jellyfin
+default_source    = "online_radio"    # local_files | online_radio | youtube_music | apple_music | jellyfin | external_audio | spotify
 fallback_source   = "local_files"
-ffmpeg_path       = ''                # blank = `ffmpeg` on PATH; shared by all sources
+ffmpeg_path       = ''                # blank = auto-download to fh6-radio/bin (else `ffmpeg` on PATH); shared by all sources
 
 [local_files]
-enabled            = true
-music_dir          = ''                # blank => set from the dashboard
-recursive          = true
-shuffle            = true
+enabled            = false
+active_station     = "My Music"        # which preset is on air
 # mp3/flac/wav/ogg decode natively; the rest goes through ffmpeg if available.
-supported_formats  = ["mp3", "flac", "wav", "ogg", "m4a", "opus", "aac", "wma", "aiff", "aif"]
+supported_formats  = ["mp3", "flac", "wav", "ogg", "m4a", "opus", "aac", "wma", "aiff", "aif", "m3u", "m3u8"]
+
+# Stations are presets you manage from the dashboard's Local Files card. Each one
+# can point at several folders, exclude subfolders, and set its own play order.
+[[local_files.station]]
+name      = "My Music"
+roots     = []                         # e.g. ['C:\Users\you\Music', 'D:\FLAC']
+excluded  = []                         # subfolders to skip, e.g. ['C:\Users\you\Music\Audiobooks']
+recursive = true
+order     = "shuffle"                  # "shuffle" | "album" | "name" | "folder"
+grouping  = "folder"                   # album grouping when order = "album": "folder" | "tags"
+repeat    = "all"                      # "all" | "one" | "off"
 
 [youtube_music]
 enabled            = false
 cookies_path       = ''                # optional Netscape cookies.txt
-yt_dlp_path        = ''                # blank = `yt-dlp` on PATH
+yt_dlp_path        = ''                # blank = auto-download to fh6-radio/bin (else `yt-dlp` on PATH)
 default_playlist   = ""
 shuffle            = true
 
 [apple_music]
-enabled            = false
-transport_controls = true              # send Windows media keys for play/pause/next/previous
-mute_external_output = false           # experimental; can also silence loopback capture on some systems
-capture_mode      = "auto"             # auto | process_loopback | device
-capture_device    = "CABLE Output"     # used when capture_mode = "device"
-monitor_when_radio_inactive = true     # monitor cable capture to default Windows output off-radio
+enabled                     = false
+transport_controls          = true     # mirror FH6 radio pause/resume/skip to Apple Music
+mute_external_output        = false    # legacy option; prefer VB-CABLE routing
+capture_mode                = "auto"   # auto | process_loopback | device
+capture_device              = "CABLE Output"
+monitor_when_radio_inactive = true     # play the cable to your default output while FH6 is not using it
 
 [jellyfin]
 enabled            = false
@@ -41,7 +50,41 @@ server_url         = ''                # e.g. 'http://127.0.0.1:8096'
 api_key            = ''                # generate this in the Jellyfin dashboard
 user_id            = ''                # the ID of the user to track playback against
 default_playlist   = ''                # jellyfin playlist ID goes here
+use_favorites      = false             # set to true to play your favorites instead of a playlist
 shuffle            = true              # true or false
+
+
+[external_audio]
+# Off by default. Enable from the dashboard Settings drawer before using External Audio.
+enabled = false
+# Empty = default Windows playback device. Otherwise use full endpoint id or part of device name, e.g. 'CABLE Input'.
+# This section is read directly by ExternalAudioSource.
+endpoint_id = ''
+# Empty = current Windows media session. Select a specific session from the dashboard when needed.
+media_session_id = ''
+
+[spotify]
+enabled            = false
+librespot_path     = ''                # blank = auto-download to fh6-radio/bin (else `librespot` on PATH)
+cache_dir          = 'spotify_cache'   # folder to save the Spotify Connect auth data
+
+[online_radio]
+enabled               = true
+default_station_index = 0 # index of radio station in list (0 refers to start of the list)
+
+# you can add as many stations as you want below. name + url are required; the
+# rest are filled in automatically when you save a station from the dashboard's
+# Discover tab (radio-browser.info) and are optional when adding by hand.
+#[[online_radio.stations]]
+#name     = "" # display name
+#url      = "" # stream url
+#favicon  = "" # logo url, shown as now-playing artwork
+#tags     = "" # comma-separated genres
+#country  = "" # ISO 3166-1 alpha-2 code or name
+#codec    = "" # e.g. "mp3", "aac"
+#bitrate  = 0  # kbps
+#uuid     = "" # radio-browser station id
+#favorite = false
 
 [audio]
 output_gain = 1.0
@@ -49,10 +92,11 @@ output_gain = 1.0
 [playback]
 race_start_playback  = "next"      # "next" | "restart" | "ignore" -- action when a race begins
 quick_station_skip   = false       # tune the radio away and back within 1s to skip the track
-radio_pause_delay_ms = 300         # how long FMOD can stop consuming audio before Apple Music pauses
-radio_diagnostics    = false       # log radio DSP input levels once per second for troubleshooting
-show_album_in_hud    = true        # show "Artist - Album" on FH6's radio artist line when available
+radio_pause_delay_ms = 300         # mixer silence delay before mirroring radio pause/resume to live sources
+radio_diagnostics    = false       # log detailed radio/DSP counters and show diagnostics in the dashboard
+show_album_in_hud    = true        # append the album to artist text in the in-game HUD when available
 volume_normalization = false       # apply ReplayGain (local files) / EBU R128 loudnorm (YT) when on
 equalizer_enabled    = false
 equalizer_bands      = [0.0, 0.0, 0.0, 0.0, 0.0]   # 60/250/1000/4000/12000 Hz, [-6, +6] dB
 force_stereo_audio   = true        # off => mono (avoids metallic phase-cancellation on the 3D radio channel)
+prebuffer_next_track = true        # pre-spawn the next track's pipeline so transitions skip the "(loading)" gap

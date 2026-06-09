@@ -48,9 +48,11 @@ add_library(version SHARED
     src/log.cpp
     src/config.cpp
     src/config_store.cpp
+    src/deps.cpp
     src/playback_dsp.cpp
     src/ring_buffer.cpp
     src/subprocess.cpp
+    src/net/http_get.cpp
     src/audio_source_manager.cpp
     src/fmod/pe_image.cpp
     src/fmod/sig_scanner.cpp
@@ -64,6 +66,11 @@ add_library(version SHARED
     src/sources/youtube_music_source.cpp
     src/sources/apple_music_source.cpp
     src/sources/jellyfin_source.cpp
+    src/sources/external_audio_source.cpp
+    src/sources/external_media_session.cpp
+    src/sources/spotify_source.cpp
+    src/worker/worker_client.cpp
+    src/sources/online_radio_source.cpp
 )
 
 # MSVC carries the forwarders via pragmas in dll_main.cpp because its .def
@@ -80,7 +87,9 @@ target_include_directories(version PRIVATE
     "$ENV{WindowsSdkDir}/Include/$ENV{WindowsSDKVersion}/cppwinrt"
 )
 
-target_link_libraries(version PRIVATE ws2_32 bcrypt psapi winhttp ole32 windowsapp winmm)
+target_link_libraries(version PRIVATE
+    ws2_32 bcrypt psapi winhttp ole32 windowsapp winmm uuid ksuser runtimeobject
+)
 
 set_target_properties(version PROPERTIES
     OUTPUT_NAME version
@@ -105,3 +114,23 @@ target_include_directories(fh6-radio-companion PRIVATE
 )
 
 target_link_libraries(fh6-radio-companion PRIVATE ole32)
+
+# Worker process: lightweight spawner that lives outside the game's address
+# space so CreateProcess (= fork on Wine) is cheap.
+add_executable(fh6-radio-worker
+    src/worker/worker_main.cpp
+    src/subprocess.cpp
+    src/log.cpp
+)
+
+target_include_directories(fh6-radio-worker PRIVATE
+    include
+    third_party/nlohmann
+)
+
+target_link_libraries(fh6-radio-worker PRIVATE advapi32)
+
+set_target_properties(fh6-radio-worker PROPERTIES
+    OUTPUT_NAME fh6-radio-worker
+    PREFIX ""
+)

@@ -144,13 +144,18 @@ void ControlLoop::run(const std::stop_token& tok) {
             if (++stale_ticks_ >= kStaleTickThreshold) {
                 stale_ticks_   = 0;
                 const auto now = std::chrono::steady_clock::now();
+                auto disc = discover_radio_instances(img_);
+                const RadioInstance* current = select_instance(disc);
+                const bool channel_dead =
+                    !current || !bridge_.channel_handle_alive(current->radio_stream);
                 if (retune_attempts_ >= kMaxRetuneAttemptsPerStall) {
                     if (!retune_suppressed_) {
                         retune_suppressed_ = true;
                         log::warn("[ctrl] radio recovery suppressed after {} stalled retune attempts",
                                   retune_attempts_);
                     }
-                } else if (now - last_retune_ >= kRetuneCooldown &&
+                } else if (channel_dead &&
+                           now - last_retune_ >= kRetuneCooldown &&
                            game_state_.read().on_target_station &&
                            game_state_.retune_streamer_station()) {
                     last_retune_ = now;
@@ -319,7 +324,7 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
         have_transport_active_ = true;
         transport_active_ = desired_transport_active;
         last_transport_change_ = now;
-        active->on_radio_active_changed(transport_active_);
+        active->on_radio_audible(transport_active_);
     } else if (desired_transport_active != transport_active_) {
         const bool repeated_flips =
             prev_raw_transport_flip_ != time_point{} &&
@@ -331,7 +336,7 @@ void ControlLoop::run_playback_state_machines(time_point now) noexcept {
             last_transport_change_ = now;
             log::info("[ctrl] radio {} (station={}, mixer={})",
                       transport_active_ ? "active" : "inactive", r10, mixer_consuming_);
-            active->on_radio_active_changed(transport_active_);
+            active->on_radio_audible(transport_active_);
         }
     }
 

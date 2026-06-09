@@ -6,7 +6,7 @@
 
 <p align="center"><img src="assets/banner.png" alt="FH6 Universal Radio" /></p>
 
-An open-source radio mod for **Forza Horizon 6**. Adds a new in-game radio station fed from your **local music**, **YouTube Music**, **Apple Music**, or **Jellyfin** server, controlled from a browser dashboard.
+An open-source radio mod for **Forza Horizon 6**. Adds a new in-game radio station fed from your **local music**, **online radio** stations, **Spotify**, **Apple Music**, **YouTube Music**, **Jellyfin** server, or **any Windows app** (Deezer, a browser tab...), controlled from a browser dashboard.
 
 <p align="center">
   <img src="assets/ingame.png" alt="In-game radio station" width="49%" />
@@ -15,18 +15,23 @@ An open-source radio mod for **Forza Horizon 6**. Adds a new in-game radio stati
 
 ## Features
 
-- **Local files**: point it at any folder. MP3 / FLAC / WAV / OGG play out of the box; M4A / AAC / OPUS / WMA / etc. play if `ffmpeg` is installed (same binary as YouTube Music below).
+- **Local files**: build named **stations** from one or more folders, exclude subfolders you don't want, and pick a play order (shuffle / albums / name / folder) with repeat modes and a searchable queue. MP3 / FLAC / WAV / OGG / M4A / AAC / OPUS / WMA / M3U / M3U8 etc.
+- **Online radio**: search a directory of thousands of internet stations by name, genre, or country (via [radio-browser.info](https://www.radio-browser.info)) or paste any stream URL; save favourites with logos and genre/bitrate badges, with live track info.
 - **YouTube Music**: paste any video, playlist, or YT Music URL from the dashboard.
+- **Apple Music**: capture full Apple Music playback through Windows/virtual-cable audio and mirror FH6 radio pause/resume/skip behavior.
+- **Spotify Connect**: cast from the Spotify app to an "FH6 Universal Radio" device (requires Spotify Premium).
 - **Jellyfin**: stream playlists from your own Jellyfin server.
+- **External audio**: capture any Windows app (Deezer, a browser tab...) and pipe it into the radio through a virtual audio cable.
 - **In-game radio integration**: audio is routed through FH6's radio bus, fades with menus and reacts to in-game volume like every other station.
 - **Live dashboard** at `http://localhost:8420`: switch source, transport controls, volume, settings.
-- **Apple Music full-track capture**: play Apple Music in the Windows app or browser and capture authorized system output into FH6, with media-key play/pause/next/previous controls where Windows routes them.
 - **Race start action**: on race begin, advance to next track, restart the current one, or leave it alone.
 - **Quick station skip**: tune the radio knob away and back within 1s to skip the current track.
 - **Loudness normalization**: For consistent volume across tracks.
 - **5-band equalizer**: 60 Hz / 250 Hz / 1 kHz / 4 kHz / 12 kHz peaking biquads, ±6 dB per band, applied producer-side at 48 kHz before audio hits the game.
 
 ## Install
+
+> 📺 Prefer a video? Watch the [installation guide on YouTube](https://www.youtube.com/watch?v=9Uwy3pDf4SQ).
 
 1. Download the latest `fh6-universal-radio.zip` from [Nexus Mods](https://www.nexusmods.com/forzahorizon6/mods/215).
 2. Close FH6.
@@ -35,47 +40,40 @@ An open-source radio mod for **Forza Horizon 6**. Adds a new in-game radio stati
 5. Cycle through radio stations until you land on the new one.
 6. Open <http://localhost:8420> in any browser on the same machine. From another device on the same network, use your PC's local IP (e.g. `http://192.168.1.42:8420`), run `ipconfig` in a Command Prompt to find it.
 
+### Dependencies
+
+Online radio, YouTube Music, Spotify, Jellyfin, and non-native local formats rely on external binaries: `yt-dlp`, `ffmpeg`, and `librespot`. The mod **downloads them automatically** on first launch into `fh6-radio\bin`, so there's nothing to install by hand.
+
+To manage them yourself instead, set the paths in the dashboard (**Settings > YouTube Music** for yt-dlp, **Settings > General > ffmpeg path**, **Settings > Spotify Connect** for librespot).
+
 ### YouTube Music
 
-YouTube playback requires three external tools. Open a **Command Prompt** and run:
+Private/age-restricted content needs a Netscape `cookies.txt` exported from your browser. Use an extension like **Get cookies.txt LOCALLY** to export it.
 
-```
-winget install yt-dlp.yt-dlp
-winget install Gyan.FFmpeg
-winget install DenoLand.Deno
-```
+### Spotify Connect
 
-Then restart the game.
-
-`yt-dlp` can also be pointed at explicitly in the dashboard under **Settings > YouTube Music** if you prefer a manual install.
-`ffmpeg` can also be configured under **Settings > General > ffmpeg path**.
-
-Private/age-restricted content also needs a Netscape `cookies.txt` exported from your browser. Use an extension like **Get cookies.txt LOCALLY** to export it.
+Enable Spotify under **Settings**, then open the Spotify app on a device on the same Wi-Fi network, tap the **Devices** icon, and pick **FH6 Universal Radio**. Requires an old Spotify Premium account (a Spotify Connect limitation).
 
 ### Apple Music
 
-Full-track Apple Music playback uses VB-CABLE to route authorized Apple Music
-audio into the FH6 radio path:
+Apple Music tracks are DRM-protected, so the mod does not download full tracks from Apple links. The supported path is to play Apple Music in the Apple Music app, route its output to VB-CABLE, and let FH6 Universal Radio capture that cable into the in-game radio.
 
-```text
-Apple Music -> CABLE Input -> CABLE Output -> FH6 Universal Radio
-```
+1. Install [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) and reboot if the installer asks.
+2. In Windows **Settings > System > Sound > Volume mixer**, set Apple Music's output to `CABLE Input`.
+3. In the dashboard, enable **Apple Music**, set capture mode to `auto` or `device`, and use `CABLE Output` as the capture device.
+4. Leave **Control playback** enabled so the source mirrors FH6 radio pause/resume/skip to Apple Music.
+5. Run FH6 Radio Companion if you want the cable monitored to your normal headphones/speakers while FH6 is closed.
 
-1. Install VB-CABLE. If you use the Windows installer, enable the VB-CABLE task
-   when offered, approve the driver setup, then reboot Windows if prompted.
-2. Open Apple Music and start playback once.
-3. Open **Windows Settings > System > Sound > Volume mixer**.
-4. Set **Apple Music > Output device** to **CABLE Input (VB-Audio Virtual Cable)**.
-5. Leave **Apple Music > Input device** as **Default**.
-6. Start **FH6 Radio Companion**. With FH6 closed, it monitors the cable back to
-   your default headphones/speakers. With FH6 running, it releases the cable so
-   FH6 can consume the radio audio.
-7. Open <http://localhost:8420>, select **Apple Music**, and keep Apple Music
-   playing.
+### External audio
 
-If Apple Music is silent outside the game, check that the companion is running.
-If it is silent in game, confirm Apple Music is routed to `CABLE Input` and the
-radio config captures `CABLE Output`.
+External Audio is a loopback capture of a Windows playback device, so the app has to play onto a device you don't otherwise hear, or it reaches your speakers directly instead of through the radio. Route it through a virtual audio cable:
+
+1. Install a virtual audio cable, e.g. [VB-Audio Virtual Cable](https://vb-audio.com/Cable/).
+2. Send the app's audio to the cable. Apps without their own output picker (like Deezer) can still be routed from Windows **Settings > System > Sound > Volume mixer**, setting the app's output to `CABLE Input`; for a browser tab, an extension like **AuRo** does the same.
+3. In the dashboard, pick that cable as the **Capture device**.
+4. Pick the app as the **Media session** for the in-game title/artist and the next/previous controls.
+
+The app then pauses and resumes with the game radio (menus, radio off) instead of playing on in the background.
 
 ## Uninstall
 
@@ -89,7 +87,7 @@ The output is always a Windows `version.dll`. You also need the radio-station me
 
 ### Windows
 
-Requires **Visual Studio 2022+** with the *Desktop development with C++* workload (CMake is bundled).
+Requires **Visual Studio 2022+** with the *Desktop development with C++* workload.
 
 ```powershell
 .\scripts\get-deps.ps1                                                  # one-time: header-only deps
@@ -100,7 +98,7 @@ Requires **Visual Studio 2022+** with the *Desktop development with C++* workloa
 
 ### Linux (cross-compile to Windows)
 
-Requires **CMake** and **llvm-mingw** (the Clang-based MinGW-w64 toolchain, since the codebase uses MSVC SEH which GCC-mingw doesn't implement). On Arch: `sudo pacman -S llvm-mingw cmake`. On other distros, grab a release from [mstorsjo/llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) and unpack it under `/opt/llvm-mingw` (the build script auto-detects that path).
+Requires **CMake** and **llvm-mingw**. On Arch: `sudo pacman -S llvm-mingw cmake`. On other distros, grab a release from [mstorsjo/llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) and unpack it under `/opt/llvm-mingw` (the build script auto-detects that path).
 
 ```bash
 ./scripts/get-deps.sh                                                   # one-time: header-only deps
@@ -115,15 +113,15 @@ Requires **CMake** and **llvm-mingw** (the Clang-based MinGW-w64 toolchain, sinc
 |---|---|
 | Dashboard says **bridge offline** | Media overlay not installed. Re-run `install.ps1` with `dist\media\` present. |
 | New radio station doesn't show in-game | **Audio > Streamer Mode** is off. Turn it on, restart the game. |
-| Game crashes on launch | Antivirus quarantined `version.dll`. Add an exclusion for the game folder. |
-| Local files don't play | No `music_dir` set, or the folder only has unsupported formats. Set one from the dashboard. |
-| `[local] failed to open ... .m4a` (or `.opus`, `.aac`, ...) | The built-in decoder handles MP3/FLAC/WAV/OGG only; other formats are routed through `ffmpeg`. Install it (`winget install Gyan.FFmpeg`) and either put it on `PATH` or set the path under **Settings > General > ffmpeg path**. |
-| YouTube Music produces no audio | Check `%TEMP%\fh6-stderr.log` (helper-process stderr lands there). Usually missing yt-dlp/ffmpeg, expired cookies, or geo/format restrictions. |
-| Jellyfin cast returns "fetch failed" (502) | Check server URL, API key, and user ID under **Settings > Jellyfin**, that the playlist ID exists, and that the server is reachable from this machine. Jellyfin transcodes to PCM via `ffmpeg`, so the configured ffmpeg path must be valid. |
+| Local files don't play | The active station has no folders, or its folders only hold unsupported formats. Add a folder in the dashboard's Local Files card. |
+| YouTube Music produces no audio | Check `%TEMP%\fh6-stderr.log` (helper-process stderr lands there). Usually expired cookies, or geo/format restrictions. |
+| Spotify device doesn't appear or won't play | Wait for `librespot` to finish downloading, confirm your phone/PC is on the same network, and that the account is Spotify Premium. |
+| External Audio plays in the background, not through the radio | You're capturing the same device the app plays on. Route the app's output to a **virtual audio cable** and select that cable as the **Capture device** (see [External audio](#external-audio)). |
+| External Audio has clicks / artifacts | Set the virtual cable to **48000 Hz** (2 ch). Other sample rates caused artifacts in testing. |
 
 ## Why this exists
 
-[Big John](https://www.nexusmods.com/forzahorizon6/mods/95) released a great **Spotify** radio mod for FH6 that I drew a lot of inspiration from. The catch: it requires Spotify Premium, and the author chose to keep it closed-source. I built FH6 Universal Radio because I believe the project can go much further once the community is allowed to contribute: adding sources (TIDAL, internet radio, etc.), polishing the UI, fixing edge cases, supporting more game builds. So this one is **fully open and GPLv3-licensed** to make that possible.
+[Big John](https://www.nexusmods.com/forzahorizon6/mods/95) released a great **Spotify** radio mod for FH6 that I drew a lot of inspiration from. The catch: it requires Spotify Premium, and the author chose to keep it closed-source. I built FH6 Universal Radio because I believe the project can go much further once the community is allowed to contribute: adding sources (TIDAL, etc.), polishing the UI, fixing edge cases, supporting more game builds. So this one is **fully open and GPLv3-licensed** to make that possible.
 
 ## Support the Project
 
@@ -139,4 +137,4 @@ Released under the [GNU General Public License v3.0](LICENSE). You're free to us
 
 ## Disclaimer
 
-Unofficial fan-made mod. Not affiliated with, endorsed by, or connected to Turn 10 Studios, Playground Games, Xbox Game Studios, Microsoft, Google, YouTube, or Jellyfin (Jellyfin LLC). All trademarks belong to their respective owners. Use at your own risk.
+Unofficial fan-made mod. Not affiliated with, endorsed by, or connected to Turn 10 Studios, Playground Games, Xbox Game Studios, Microsoft, Google, YouTube, Jellyfin (Jellyfin LLC), or Spotify (Spotify AB). All trademarks belong to their respective owners. Use at your own risk.
